@@ -3,13 +3,16 @@ name: Hexo Deploy
 on:
   push:
     branches:
-      - content      # 推送文章时自动部署
-      - source       # 修改 Hexo 配置时也部署
-  workflow_dispatch: # 手动触发
+      - content
+      - source
+  workflow_dispatch:
 
 concurrency:
   group: hexo-deploy
   cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
   build-and-deploy:
