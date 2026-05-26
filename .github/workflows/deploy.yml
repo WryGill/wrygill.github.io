@@ -1,0 +1,65 @@
+name: Hexo Deploy
+
+on:
+  push:
+    branches:
+      - content      # 推送文章时自动部署
+      - source       # 修改 Hexo 配置时也部署
+  workflow_dispatch: # 手动触发
+
+concurrency:
+  group: hexo-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Hexo source
+        uses: actions/checkout@v4
+        with:
+          repository: WryGill/wrygill.github.io
+          ref: source
+          path: source
+          submodules: true
+
+      - name: Checkout blog posts
+        uses: actions/checkout@v4
+        with:
+          repository: WryGill/wrygill.github.io
+          ref: content
+          path: content
+          sparse-checkout: posts
+
+      - name: Copy posts to source
+        run: |
+          rm -rf source/source/_posts
+          cp -r content/posts source/source/_posts
+          echo "Copied posts:"
+          ls -la source/source/_posts/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: source
+
+      - name: Clean & Generate
+        run: npx hexo clean && npx hexo generate
+        working-directory: source
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "Aromatic"
+          git config --global user.email "constantblock37@gmail.com"
+
+      - name: Deploy to master
+        run: npx hexo deploy
+        working-directory: source
+        env:
+          HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
