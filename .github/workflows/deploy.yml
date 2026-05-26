@@ -36,9 +36,10 @@ jobs:
 
       - name: Copy posts to source
         run: |
-          rm -rf source/source/_posts
-          cp -r content/posts source/source/_posts
-          echo "Copied posts:"
+          mkdir -p source/source/_posts
+          rm -rf source/source/_posts/*
+          cp -r content/posts/*.md source/source/_posts/
+          echo "=== Copied posts ==="
           ls -la source/source/_posts/
 
       - name: Setup Node.js
@@ -55,11 +56,6 @@ jobs:
       - name: Clean & Generate
         run: npx hexo clean && npx hexo generate
         working-directory: source
-
-      - name: Configure Git
-        run: |
-          git config --global user.name "Aromatic"
-          git config --global user.email "constantblock37@gmail.com"
 
       - name: Deploy to master
         run: npx hexo deploy
