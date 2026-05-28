@@ -63,12 +63,48 @@ jobs:
         run: npm install
         working-directory: source
 
-      - name: Clean & Generate
-        run: npm run clean && npm run build
+      - name: Debug hexo env
+        run: |
+          echo "=== node version ==="
+          node --version
+          echo "=== hexo binary ==="
+          ls -la node_modules/.bin/hexo 2>/dev/null || echo "no hexo binary"
+          echo "=== hexo package ==="
+          ls node_modules/hexo/package.json 2>/dev/null && node -e "console.log(require('hexo/package.json').version)" || echo "no hexo package"
+          echo "=== hexo-cli version ==="
+          node -e "try{console.log(require('hexo-cli/package.json').version)}catch(e){console.log('no hexo-cli')}" 2>/dev/null
+          echo "=== try hexo version ==="
+          ./node_modules/.bin/hexo version 2>/dev/null || true
         working-directory: source
 
-      - name: Deploy to master
-        run: npm run deploy
+      - name: Build
+        run: |
+          node -e "
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            hexo.init()
+              .then(() => hexo.load())
+              .then(() => {
+                console.log('Posts:', hexo.model('Post').length);
+                console.log('Pages:', hexo.model('Page').length);
+                return hexo.call('generate');
+              })
+              .then(() => { console.log('Generate done'); return hexo.exit(); })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
+        working-directory: source
+
+      - name: Deploy
+        run: |
+          node -e "
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            hexo.init()
+              .then(() => hexo.load())
+              .then(() => hexo.call('deploy', { force: true }))
+              .then(() => { console.log('Deploy done'); return hexo.exit(); })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
