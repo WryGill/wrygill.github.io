@@ -85,18 +85,28 @@ jobs:
             const Hexo = require('hexo');
             const cwd = process.cwd();
 
+            // Check hexo package structure
+            const hexoRoot = path.dirname(require.resolve('hexo/package.json'));
+            console.log('hexo root:', hexoRoot);
+            console.log('=== hexo dist/plugins/processor ===');
+            const procDir = path.join(hexoRoot, 'dist', 'plugins', 'processor');
+            try {
+              fs.readdirSync(procDir).forEach(f => console.log('  ', f));
+            } catch(e) { console.log('dist path ERROR:', procDir, e.message); }
+            const procDir2 = path.join(hexoRoot, 'lib', 'plugins', 'processor');
+            try {
+              fs.readdirSync(procDir2).forEach(f => console.log('  ', f));
+            } catch(e) { console.log('lib path ERROR:', procDir2, e.message); }
+
             const hexo = new Hexo(cwd, { silent: false });
             hexo.init()
               .then(() => {
-                console.log('=== Processors ===');
                 const list = hexo.extend.processor.list();
                 console.log('processor count:', list.length);
                 list.forEach((p, i) => {
-                  const pattern = p.pattern;
-                  console.log(i + ':', pattern && pattern.toString ? pattern.toString().slice(0,80) : pattern);
+                  const str = p.pattern && p.pattern.toString ? p.pattern.toString().slice(0,100) : 'unknown';
+                  console.log(i + ' pattern:', str);
                 });
-                console.log('=== After init ===');
-                console.log('source base:', hexo.source.base);
                 return hexo.load();
               })
               .then(() => {
