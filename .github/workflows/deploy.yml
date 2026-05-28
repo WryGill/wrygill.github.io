@@ -80,13 +80,25 @@ jobs:
       - name: Build
         run: |
           node -e "
+            const fs = require('fs');
+            const path = require('path');
             const Hexo = require('hexo');
-            const hexo = new Hexo(process.cwd(), { silent: false });
+            const cwd = process.cwd();
+            console.log('CWD:', cwd);
+            console.log('source_dir config:', require(cwd + '/_config.yml').source_dir);
+            console.log('=== list source/source/_posts/ ===');
+            try { fs.readdirSync(cwd + '/source/_posts/').forEach(f => console.log('  ', f)) } catch(e) { console.log('ERROR:', e.message) }
+            console.log('=== list source/_posts (wrong?) ===');
+            try { fs.readdirSync(cwd + '/_posts/').forEach(f => console.log('  ', f)) } catch(e) { console.log('none:', e.message) }
+
+            const hexo = new Hexo(cwd, { silent: false });
             hexo.init()
               .then(() => hexo.load())
               .then(() => {
                 console.log('Posts:', hexo.model('Post').length);
                 console.log('Pages:', hexo.model('Page').length);
+                console.log('source._files:',
+                  Object.keys(hexo.model('Post')._proxy || {}).length);
                 return hexo.call('generate');
               })
               .then(() => { console.log('Generate done'); return hexo.exit(); })
