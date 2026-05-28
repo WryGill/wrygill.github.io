@@ -64,11 +64,11 @@ jobs:
         working-directory: source
 
       - name: Clean & Generate
-        run: npx hexo clean && npx hexo generate
+        run: npm run clean && npm run build
         working-directory: source
 
       - name: Deploy to master
-        run: npx hexo deploy
+        run: npm run deploy
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
