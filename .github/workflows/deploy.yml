@@ -63,73 +63,33 @@ jobs:
         run: npm install
         working-directory: source
 
-      - name: Debug hexo env
-        run: |
-          echo "=== node version ==="
-          node --version
-          echo "=== hexo binary ==="
-          ls -la node_modules/.bin/hexo 2>/dev/null || echo "no hexo binary"
-          echo "=== hexo package ==="
-          ls node_modules/hexo/package.json 2>/dev/null && node -e "console.log(require('hexo/package.json').version)" || echo "no hexo package"
-          echo "=== hexo-cli version ==="
-          node -e "try{console.log(require('hexo-cli/package.json').version)}catch(e){console.log('no hexo-cli')}" 2>/dev/null
-          echo "=== try hexo version ==="
-          ./node_modules/.bin/hexo version 2>/dev/null || true
-        working-directory: source
-
       - name: Build
-        run: |
-          node -e "
-            const fs = require('fs');
-            const path = require('path');
-            const Hexo = require('hexo');
-            const cwd = process.cwd();
-
-            // Check hexo package structure
-            const hexoRoot = path.dirname(require.resolve('hexo/package.json'));
-            console.log('hexo root:', hexoRoot);
-            console.log('=== hexo dist/plugins/processor ===');
-            const procDir = path.join(hexoRoot, 'dist', 'plugins', 'processor');
-            try {
-              fs.readdirSync(procDir).forEach(f => console.log('  ', f));
-            } catch(e) { console.log('dist path ERROR:', procDir, e.message); }
-            const procDir2 = path.join(hexoRoot, 'lib', 'plugins', 'processor');
-            try {
-              fs.readdirSync(procDir2).forEach(f => console.log('  ', f));
-            } catch(e) { console.log('lib path ERROR:', procDir2, e.message); }
-
-            const hexo = new Hexo(cwd, { silent: false });
-            hexo.init()
-              .then(() => {
-                const list = hexo.extend.processor.list();
-                console.log('processor count:', list.length);
-                list.forEach((p, i) => {
-                  const str = p.pattern && p.pattern.toString ? p.pattern.toString().slice(0,100) : 'unknown';
-                  console.log(i + ' pattern:', str);
-                });
-                return hexo.load();
-              })
-              .then(() => {
-                console.log('Posts:', hexo.model('Post').length);
-                console.log('Pages:', hexo.model('Page').length);
-                return hexo.call('generate');
-              })
-              .then(() => { console.log('Generate done'); return hexo.exit(); })
-              .catch(e => { console.error('ERROR:', e.message); process.exit(1); });
-          "
         working-directory: source
-
-      - name: Deploy
         run: |
           node -e "
             const Hexo = require('hexo');
             const hexo = new Hexo(process.cwd(), { silent: false });
+            // 关键修复：env.init 必须设为 true，否则外部插件（含 markdown 渲染器）不会被加载
+            hexo.env.init = true;
+            hexo.init()
+              .then(() => hexo.load())
+              .then(() => hexo.call('generate'))
+              .then(() => { console.log('Generate done'); return hexo.exit(); })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
+
+      - name: Deploy
+        working-directory: source
+        env:
+          HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node -e "
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            hexo.env.init = true;
             hexo.init()
               .then(() => hexo.load())
               .then(() => hexo.call('deploy', { force: true }))
               .then(() => { console.log('Deploy done'); return hexo.exit(); })
               .catch(e => { console.error(e); process.exit(1); });
           "
-        working-directory: source
-        env:
-          HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
