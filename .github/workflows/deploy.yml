@@ -82,10 +82,11 @@ jobs:
           node -e "
             const fs = require('fs');
             const path = require('path');
+            const glob = require('glob');
             const Hexo = require('hexo');
             const cwd = process.cwd();
             console.log('CWD:', cwd);
-            console.log('=== all files in cwd/source/ ===');
+            console.log('=== recursive listing of cwd/source/ ===');
             function listDir(dir, depth) {
               if (depth > 3) return;
               try {
@@ -102,29 +103,30 @@ jobs:
               } catch(e) { console.log('  [ERR]', dir, e.message); }
             }
             listDir(cwd + '/source', 0);
+            console.log('=== glob scan ===');
+            try {
+              const files = glob.sync('**/*', { cwd: cwd + '/source', dot: false, nodir: true, ignore: ['node_modules/**'] });
+              console.log('Files found:', files.length);
+              files.slice(0, 20).forEach(f => console.log('  ', f));
+            } catch(e) { console.log('ERROR:', e.message); }
 
             const hexo = new Hexo(cwd, { silent: false });
             hexo.init()
               .then(() => {
-                console.log('=== Box base ===', hexo.source.base);
-                console.log('=== source_dir ===', hexo.source_dir);
-                // Try to list files from the Box
-                return hexo.source.list();
-              })
-              .then(files => {
-                console.log('Source files from Box:', files.length);
-                files.slice(0, 5).forEach(f => console.log('  ', f));
+                console.log('=== Box inspect ===');
+                console.log('Box methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(hexo.source)).join(', '));
+                console.log('Box base:', hexo.source.base);
+                console.log('source_dir:', hexo.source_dir);
                 return hexo.load();
               })
               .then(() => {
                 console.log('Posts:', hexo.model('Post').length);
                 console.log('Pages:', hexo.model('Page').length);
-                // List all model names
-                console.log('Models:', Object.keys(hexo.model._models || {}));
+                console.log('All models:', Object.keys(hexo.model._models || {}));
                 return hexo.call('generate');
               })
               .then(() => { console.log('Generate done'); return hexo.exit(); })
-              .catch(e => { console.error('ERROR:', e.message, e.stack); process.exit(1); });
+              .catch(e => { console.error('ERROR:', e.message); process.exit(1); });
           "
         working-directory: source
 
