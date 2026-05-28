@@ -60,7 +60,9 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          npm install hexo@8.1.2
         working-directory: source
 
       - name: Build
