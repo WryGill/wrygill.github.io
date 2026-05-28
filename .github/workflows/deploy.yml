@@ -60,23 +60,17 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install
-        working-directory: source
-
-      - name: Diagnose hexo
         run: |
-          echo "=== pwd ===" && pwd
-          echo "=== node_modules/hexo ===" && ls node_modules/hexo/package.json 2>/dev/null && node -e "console.log(require('hexo/package.json').version)" 2>&1 || echo "hexo core NOT LOADABLE"
-          echo "=== hexo version ===" && npx hexo version 2>&1 || true
-          echo "=== hexo clean (direct) ===" && ./node_modules/.bin/hexo clean 2>&1 || true
+          npm install
+          npm install hexo-cli --no-save
         working-directory: source
 
       - name: Clean & Generate
-        run: npm run clean && npm run build
+        run: npx hexo clean && npx hexo generate
         working-directory: source
 
       - name: Deploy to master
-        run: npm run deploy
+        run: npx hexo deploy
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
