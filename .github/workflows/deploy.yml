@@ -32,7 +32,9 @@ jobs:
           repository: WryGill/wrygill.github.io
           ref: content
           path: content
-          sparse-checkout: posts
+          sparse-checkout: |
+            posts
+            assets
 
       - name: Copy posts to source
         run: |
@@ -41,6 +43,16 @@ jobs:
           cp -r content/posts/*.md source/source/_posts/
           echo "=== Copied posts ==="
           ls -la source/source/_posts/
+
+      - name: Copy assets to source
+        run: |
+          if [ -d content/assets ]; then
+            mkdir -p source/source/assets
+            rm -rf source/source/assets/*
+            cp -r content/assets/* source/source/assets/
+            echo "=== Copied assets ==="
+            find source/source/assets -type f
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

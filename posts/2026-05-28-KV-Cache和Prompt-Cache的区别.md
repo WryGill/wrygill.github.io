@@ -246,7 +246,7 @@ def generate(model, prompt_tokens, max_new_tokens=50):
 
 每一步 decode 循环里，模型只处理 1 个新 token，`torch.cat` 把它追加到缓存里，K 和 V 张量随序列增长越来越长。但每次只算 1 个 token 的投影，历史 token 的 K/V 直接复用。
 
-![KV Cache 的 Prefill 和 Decode 阶段对比](../assets/kv-cache-post/kv-cache-prefill-decode.png)
+![KV Cache 的 Prefill 和 Decode 阶段对比](/assets/kv-cache-post/kv-cache-prefill-decode.png)
 
 #### 显存开销
 
@@ -308,7 +308,7 @@ class KVCacheBlock:
 
 请求的 KV Cache 不再是一整块连续内存，而是一个 block 链表。序列每增长 16 个 token，就从池子里申请一个新 block 挂到链表末尾。
 
-![vLLM PagedAttention 块分配示意图](../assets/kv-cache-post/vllm-paged-attention.png)
+![vLLM PagedAttention 块分配示意图](/assets/kv-cache-post/vllm-paged-attention.png)
 
 PagedAttention 解决的是单请求内部的 KV Cache 显存管理问题——消灭碎片、按需分配。但它顺带解锁了另一件事：因为 KV Cache 已经按 block 拆开了，多个请求的公共前缀自然可以指向同一组物理 block。这就是下一节要讲的 Prompt Cache。
 
@@ -404,7 +404,7 @@ def find_cache_match(prompt_blocks, breakpoint_index):
 
 这个 lookback 机制的好处是不要求精确的前缀匹配。比如：
 
-![Anthropic Prompt Cache 的 lookback 窗口机制](../assets/kv-cache-post/anthropic-lookback.png)
+![Anthropic Prompt Cache 的 lookback 窗口机制](/assets/kv-cache-post/anthropic-lookback.png)
 
 - 上一次请求的 system prompt 后面跟了"发货政策查询"，存在缓存里
 - 这次请求的 system prompt 后面跟了"退换货政策查询"，跟上次不同
