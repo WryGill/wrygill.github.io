@@ -93,7 +93,11 @@ jobs:
               .then(() => hexo.load())
               .then(() => {
                 if (hexo.config.deploy && process.env.HEXO_DEPLOYER_GIT_TOKEN) {
-                  hexo.config.deploy.token = process.env.HEXO_DEPLOYER_GIT_TOKEN;
+                  // 将 repo 转为对象格式，使 token 被 hexo-deployer-git 正确处理
+                  hexo.config.deploy.repo = {
+                    url: hexo.config.deploy.repo || 'https://github.com/WryGill/wrygill.github.io.git',
+                    token: process.env.HEXO_DEPLOYER_GIT_TOKEN
+                  };
                 }
                 return hexo.call('deploy', { force: true });
               })
