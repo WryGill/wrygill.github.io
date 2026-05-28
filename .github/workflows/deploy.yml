@@ -85,22 +85,15 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # 使用 extraheader 让 git push 自动带上 token 认证，避免交互式输入密码
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf '%s' "x-access-token:$HEXO_DEPLOYER_GIT_TOKEN" | base64 -w0)"
           node -e "
             const Hexo = require('hexo');
             const hexo = new Hexo(process.cwd(), { silent: false });
             hexo.env.init = true;
             hexo.init()
               .then(() => hexo.load())
-              .then(() => {
-                if (hexo.config.deploy && process.env.HEXO_DEPLOYER_GIT_TOKEN) {
-                  // 将 repo 转为对象格式，使 token 被 hexo-deployer-git 正确处理
-                  hexo.config.deploy.repo = {
-                    url: hexo.config.deploy.repo || 'https://github.com/WryGill/wrygill.github.io.git',
-                    token: process.env.HEXO_DEPLOYER_GIT_TOKEN
-                  };
-                }
-                return hexo.call('deploy', { force: true });
-              })
+              .then(() => hexo.call('deploy', { force: true }))
               .then(() => { console.log('Deploy done'); return hexo.exit(); })
               .catch(e => { console.error(e); process.exit(1); });
           "
