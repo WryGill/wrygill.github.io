@@ -60,7 +60,9 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          npm install hexo@7.0.0 --no-save
         working-directory: source
 
       - name: Clean & Generate
@@ -70,19 +72,13 @@ jobs:
             const hexo = new Hexo(process.cwd(), { silent: false });
             hexo.init()
               .then(() => {
-                // Check what hexo sees in the source dir
                 const Post = hexo.model('Post');
                 console.log('Post schema loaded:', !!Post);
                 console.log('DB length:', hexo.database.model('Post').length);
-                // Try to load a post manually
-                return hexo.post.load();
-              })
-              .then(posts => {
-                console.log('Loaded posts:', posts.length);
-                return hexo.call('generate');
+                return hexo.call('generate', { force: true });
               })
               .then(() => console.log('Generate done'))
-              .catch(e => { console.error('ERROR:', e.message, e.stack); process.exit(1); });
+              .catch(e => { console.error('ERROR:', e.message); process.exit(1); });
           "
         working-directory: source
 
