@@ -57,39 +57,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Install dependencies
         run: npm install
         working-directory: source
 
-      - name: Build
-        run: |
-          node -e "
-            const Hexo = require('hexo');
-            const hexo = new Hexo(process.cwd(), { silent: false });
-            hexo.init()
-              .then(() => hexo.source.process())
-              .then(() => {
-                console.log('Posts:', hexo.model('Post').length);
-                console.log('Pages:', hexo.model('Page').length);
-                return hexo.call('generate');
-              })
-              .then(() => { console.log('Generate done'); return hexo.exit(); })
-              .catch(e => { console.error(e); process.exit(1); });
-          "
+      - name: Clean & Generate
+        run: npx hexo clean && npx hexo generate
         working-directory: source
 
-      - name: Deploy
-        run: |
-          node -e "
-            const Hexo = require('hexo');
-            const hexo = new Hexo(process.cwd(), { silent: false });
-            hexo.init()
-              .then(() => hexo.call('deploy', { force: true }))
-              .then(() => { console.log('Deploy done'); return hexo.exit(); })
-              .catch(e => { console.error(e); process.exit(1); });
-          "
+      - name: Deploy to master
+        run: npx hexo deploy
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
