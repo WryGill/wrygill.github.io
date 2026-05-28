@@ -82,39 +82,24 @@ jobs:
           node -e "
             const fs = require('fs');
             const path = require('path');
-            const glob = require('glob');
             const Hexo = require('hexo');
             const cwd = process.cwd();
-            console.log('CWD:', cwd);
-            console.log('=== recursive listing of cwd/source/ ===');
-            function listDir(dir, depth) {
-              if (depth > 3) return;
-              try {
-                fs.readdirSync(dir, {withFileTypes: true}).forEach(d => {
-                  const indent = '  '.repeat(depth);
-                  if (d.isDirectory()) {
-                    console.log(indent + d.name + '/');
-                    if (d.name !== 'node_modules' && d.name !== '.git')
-                      listDir(dir + '/' + d.name, depth + 1);
-                  } else {
-                    console.log(indent + d.name);
-                  }
-                });
-              } catch(e) { console.log('  [ERR]', dir, e.message); }
-            }
-            listDir(cwd + '/source', 0);
-            console.log('=== glob scan ===');
-            try {
-              const files = glob.sync('**/*', { cwd: cwd + '/source', dot: false, nodir: true, ignore: ['node_modules/**'] });
-              console.log('Files found:', files.length);
-              files.slice(0, 20).forEach(f => console.log('  ', f));
-            } catch(e) { console.log('ERROR:', e.message); }
 
+            // Check Hexo internals
             const hexo = new Hexo(cwd, { silent: false });
+            console.log('=== source box type ===');
+            console.log('constructor:', hexo.source.constructor.name);
+            console.log('has process:', typeof hexo.source.process);
+            console.log('has watch:', typeof hexo.source.watch);
+            console.log('own props:', Object.getOwnPropertyNames(hexo.source).slice(0,10));
+            console.log('proto methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(hexo.source)).join(','));
+            // Check the Box class
+            console.log('Box class:', hexo.source.constructor.toString().slice(0,200));
+
             hexo.init()
               .then(() => {
-                console.log('=== Box inspect ===');
-                console.log('Box methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(hexo.source)).join(', '));
+                console.log('=== After init ===');
+                console.log('has process:', typeof hexo.source.process);
                 console.log('Box base:', hexo.source.base);
                 console.log('source_dir:', hexo.source_dir);
                 return hexo.load();
@@ -122,7 +107,6 @@ jobs:
               .then(() => {
                 console.log('Posts:', hexo.model('Post').length);
                 console.log('Pages:', hexo.model('Page').length);
-                console.log('All models:', Object.keys(hexo.model._models || {}));
                 return hexo.call('generate');
               })
               .then(() => { console.log('Generate done'); return hexo.exit(); })
