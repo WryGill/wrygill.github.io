@@ -63,6 +63,15 @@ jobs:
         run: npm install
         working-directory: source
 
+      - name: Diagnose hexo
+        run: |
+          echo "=== pwd ===" && pwd
+          echo "=== ls ===" && ls -la
+          echo "=== _config.yml ===" && head -3 _config.yml
+          echo "=== node_modules/.bin/hexo ===" && ls -la node_modules/.bin/hexo 2>/dev/null || echo "NOT FOUND"
+          echo "=== hexo version ===" && npx hexo version 2>&1 || true
+        working-directory: source
+
       - name: Clean & Generate
         run: npm run clean && npm run build
         working-directory: source
