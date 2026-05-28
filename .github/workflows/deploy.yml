@@ -60,36 +60,30 @@ jobs:
           node-version: 18
 
       - name: Install dependencies
-        run: |
-          npm install
-          npm install hexo@7.0.0 --no-save
+        run: npm install
         working-directory: source
 
-      - name: Clean & Generate
+      - name: Build
         run: |
           node -e "
             const Hexo = require('hexo');
             const hexo = new Hexo(process.cwd(), { silent: false });
             hexo.init()
-              .then(() => {
-                const Post = hexo.model('Post');
-                console.log('Post schema loaded:', !!Post);
-                console.log('DB length:', hexo.database.model('Post').length);
-                return hexo.call('generate', { force: true });
-              })
-              .then(() => console.log('Generate done'))
-              .catch(e => { console.error('ERROR:', e.message); process.exit(1); });
+              .then(() => hexo.load())
+              .then(() => hexo.call('generate'))
+              .then(() => { console.log('Generate done'); return hexo.exit(); })
+              .catch(e => { console.error(e); process.exit(1); });
           "
         working-directory: source
 
-      - name: Deploy to master
+      - name: Deploy
         run: |
           node -e "
             const Hexo = require('hexo');
             const hexo = new Hexo(process.cwd(), { silent: false });
             hexo.init()
               .then(() => hexo.call('deploy', { force: true }))
-              .then(() => console.log('Deploy done'))
+              .then(() => { console.log('Deploy done'); return hexo.exit(); })
               .catch(e => { console.error(e); process.exit(1); });
           "
         working-directory: source
