@@ -64,11 +64,28 @@ jobs:
         working-directory: source
 
       - name: Clean & Generate
-        run: npx hexo clean && npx hexo generate
+        run: |
+          node -e "
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            hexo.init()
+              .then(() => hexo.call('clean'))
+              .then(() => hexo.call('generate'))
+              .then(() => console.log('Generate done'))
+              .catch(e => { console.error(e); process.exit(1); });
+          "
         working-directory: source
 
       - name: Deploy to master
-        run: npx hexo deploy
+        run: |
+          node -e "
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            hexo.init()
+              .then(() => hexo.call('deploy', { force: true }))
+              .then(() => console.log('Deploy done'))
+              .catch(e => { console.error(e); process.exit(1); });
+          "
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
