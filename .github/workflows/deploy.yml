@@ -91,7 +91,12 @@ jobs:
             hexo.env.init = true;
             hexo.init()
               .then(() => hexo.load())
-              .then(() => hexo.call('deploy', { force: true }))
+              .then(() => {
+                if (hexo.config.deploy && process.env.HEXO_DEPLOYER_GIT_TOKEN) {
+                  hexo.config.deploy.token = process.env.HEXO_DEPLOYER_GIT_TOKEN;
+                }
+                return hexo.call('deploy', { force: true });
+              })
               .then(() => { console.log('Deploy done'); return hexo.exit(); })
               .catch(e => { console.error(e); process.exit(1); });
           "
