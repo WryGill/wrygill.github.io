@@ -70,7 +70,11 @@ jobs:
             const hexo = new Hexo(process.cwd(), { silent: false });
             hexo.init()
               .then(() => hexo.load())
-              .then(() => hexo.call('generate'))
+              .then(() => {
+                console.log('Posts after load:', hexo.model('Post').length);
+                console.log('Pages:', hexo.model('Page').length);
+                return hexo.call('generate');
+              })
               .then(() => { console.log('Generate done'); return hexo.exit(); })
               .catch(e => { console.error(e); process.exit(1); });
           "
