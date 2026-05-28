@@ -85,23 +85,18 @@ jobs:
             const Hexo = require('hexo');
             const cwd = process.cwd();
 
-            // Check Hexo internals
             const hexo = new Hexo(cwd, { silent: false });
-            console.log('=== source box type ===');
-            console.log('constructor:', hexo.source.constructor.name);
-            console.log('has process:', typeof hexo.source.process);
-            console.log('has watch:', typeof hexo.source.watch);
-            console.log('own props:', Object.getOwnPropertyNames(hexo.source).slice(0,10));
-            console.log('proto methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(hexo.source)).join(','));
-            // Check the Box class
-            console.log('Box class:', hexo.source.constructor.toString().slice(0,200));
-
             hexo.init()
               .then(() => {
+                console.log('=== Processors ===');
+                const list = hexo.extend.processor.list();
+                console.log('processor count:', list.length);
+                list.forEach((p, i) => {
+                  const pattern = p.pattern;
+                  console.log(i + ':', pattern && pattern.toString ? pattern.toString().slice(0,80) : pattern);
+                });
                 console.log('=== After init ===');
-                console.log('has process:', typeof hexo.source.process);
-                console.log('Box base:', hexo.source.base);
-                console.log('source_dir:', hexo.source_dir);
+                console.log('source base:', hexo.source.base);
                 return hexo.load();
               })
               .then(() => {
