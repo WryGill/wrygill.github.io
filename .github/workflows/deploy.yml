@@ -82,28 +82,49 @@ jobs:
           node -e "
             const fs = require('fs');
             const path = require('path');
-            const yaml = require('js-yaml');
             const Hexo = require('hexo');
             const cwd = process.cwd();
             console.log('CWD:', cwd);
-            const config = yaml.load(fs.readFileSync(cwd + '/_config.yml', 'utf8'));
-            console.log('source_dir:', config.source_dir);
-            console.log('=== posts in source_dir/_posts/ ===');
-            const postsDir = cwd + '/' + (config.source_dir || 'source') + '/_posts';
-            try { fs.readdirSync(postsDir).forEach(f => console.log('  ', f)) } catch(e) { console.log('ERROR:', e.message) }
-            console.log('=== posts in ./_posts (absolute) ===');
-            try { fs.readdirSync(cwd + '/_posts/').forEach(f => console.log('  ', f)) } catch(e) { console.log('none:', e.message) }
+            console.log('=== all files in cwd/source/ ===');
+            function listDir(dir, depth) {
+              if (depth > 3) return;
+              try {
+                fs.readdirSync(dir, {withFileTypes: true}).forEach(d => {
+                  const indent = '  '.repeat(depth);
+                  if (d.isDirectory()) {
+                    console.log(indent + d.name + '/');
+                    if (d.name !== 'node_modules' && d.name !== '.git')
+                      listDir(dir + '/' + d.name, depth + 1);
+                  } else {
+                    console.log(indent + d.name);
+                  }
+                });
+              } catch(e) { console.log('  [ERR]', dir, e.message); }
+            }
+            listDir(cwd + '/source', 0);
 
             const hexo = new Hexo(cwd, { silent: false });
             hexo.init()
-              .then(() => hexo.load())
+              .then(() => {
+                console.log('=== Box base ===', hexo.source.base);
+                console.log('=== source_dir ===', hexo.source_dir);
+                // Try to list files from the Box
+                return hexo.source.list();
+              })
+              .then(files => {
+                console.log('Source files from Box:', files.length);
+                files.slice(0, 5).forEach(f => console.log('  ', f));
+                return hexo.load();
+              })
               .then(() => {
                 console.log('Posts:', hexo.model('Post').length);
                 console.log('Pages:', hexo.model('Page').length);
+                // List all model names
+                console.log('Models:', Object.keys(hexo.model._models || {}));
                 return hexo.call('generate');
               })
               .then(() => { console.log('Generate done'); return hexo.exit(); })
-              .catch(e => { console.error(e); process.exit(1); });
+              .catch(e => { console.error('ERROR:', e.message, e.stack); process.exit(1); });
           "
         working-directory: source
 
