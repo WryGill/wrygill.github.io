@@ -65,13 +65,16 @@ jobs:
 
       - name: Clean & Generate
         run: |
-          echo "=== _posts contents ===" && ls source/_posts/ 2>/dev/null || echo "NO _posts DIR"
           node -e "
             const Hexo = require('hexo');
-            const hexo = new Hexo(process.cwd(), { silent: false, debug: true });
+            const hexo = new Hexo(process.cwd(), { silent: false });
             hexo.init()
-              .then(() => { console.log('Posts after init:', hexo.model('Post').length); return hexo.call('generate'); })
-              .then(() => { console.log('Generate done'); console.log('Posts after generate:', hexo.model('Post').length); })
+              .then(() => {
+                console.log('model(Post):', hexo.model('Post').length);
+                console.log('locals posts:', hexo.locals.get('posts').length);
+                return hexo.call('generate');
+              })
+              .then(() => console.log('Generate done'))
               .catch(e => { console.error(e); process.exit(1); });
           "
         working-directory: source
