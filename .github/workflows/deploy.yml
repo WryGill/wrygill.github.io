@@ -66,10 +66,9 @@ jobs:
       - name: Diagnose hexo
         run: |
           echo "=== pwd ===" && pwd
-          echo "=== ls ===" && ls -la
-          echo "=== _config.yml ===" && head -3 _config.yml
-          echo "=== node_modules/.bin/hexo ===" && ls -la node_modules/.bin/hexo 2>/dev/null || echo "NOT FOUND"
+          echo "=== node_modules/hexo ===" && ls node_modules/hexo/package.json 2>/dev/null && node -e "console.log(require('hexo/package.json').version)" 2>&1 || echo "hexo core NOT LOADABLE"
           echo "=== hexo version ===" && npx hexo version 2>&1 || true
+          echo "=== hexo clean (direct) ===" && ./node_modules/.bin/hexo clean 2>&1 || true
         working-directory: source
 
       - name: Clean & Generate
