@@ -62,15 +62,15 @@ jobs:
       - name: Install dependencies
         run: |
           npm install
-          npm install hexo-cli --no-save
+          npm install hexo@6.3.0 --no-save
         working-directory: source
 
       - name: Clean & Generate
-        run: npx hexo-cli clean && npx hexo-cli generate
+        run: npx hexo clean && npx hexo generate
         working-directory: source
 
       - name: Deploy to master
-        run: npx hexo-cli deploy
+        run: npx hexo deploy
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
