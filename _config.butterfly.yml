@@ -13,6 +13,9 @@ index:
     enable: true
     text: 后端开发、编程、生活、随笔
 
+# 首页 banner 背景图
+index_img: /img/miku.jpg
+
 # 头像
 avatar:
   img: /img/aromatic.jpg
