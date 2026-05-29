@@ -102,3 +102,4 @@ jobs:
               .then(() => { console.log('Deploy done'); return hexo.exit(); })
               .catch(e => { console.error(e); process.exit(1); });
           "
+# trigger rebuild: cover config added
