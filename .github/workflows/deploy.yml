@@ -91,6 +91,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           # 使用 extraheader 让 git push 自动带上 token 认证，避免交互式输入密码
           git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf '%s' "x-access-token:$HEXO_DEPLOYER_GIT_TOKEN" | base64 -w0)"
+          # trigger rebuild: source branch images fixed + index_img added
           node -e "
             const Hexo = require('hexo');
             const hexo = new Hexo(process.cwd(), { silent: false });
