@@ -37,6 +37,17 @@ post:
     enable: true
     content: 本博客所有文章除特别声明外，均采用 CC BY-NC-SA 4.0 许可协议。转载请注明出处！
 
+# 文章封面图（从以下图片中随机抽取）
+cover:
+  index_enable: true
+  aside_enable: true
+  archives_enable: true
+  position: both
+  default_cover:
+    - /img/miku_cover_1.jpg
+    - /img/miku_cover_2.jpg
+    - /img/miku_cover_3.jpg
+
 # 右下角设置
 rightside:
   readmode: true
