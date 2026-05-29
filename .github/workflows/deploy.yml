@@ -48,8 +48,12 @@ jobs:
         run: |
           if [ -d content/assets ]; then
             mkdir -p source/source/assets
-            rm -rf source/source/assets/*
-            cp -r content/assets/* source/source/assets/
+            # 只覆盖 content/assets 中存在的文章插图目录，保留 source branch 中其他自定义资产（如主题图片）
+            for dir in content/assets/*/; do
+              slug=$(basename "$dir")
+              rm -rf "source/source/assets/$slug"
+              cp -r "$dir" "source/source/assets/$slug"
+            done
             echo "=== Copied assets ==="
             find source/source/assets -type f
           fi
