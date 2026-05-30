@@ -32,7 +32,8 @@ jobs:
           repository: WryGill/wrygill.github.io
           ref: content
           path: content
-          sparse-checkout: posts
+          sparse-checkout: |
+            posts
 
       - name: Copy posts to source
         run: |
@@ -51,20 +52,35 @@ jobs:
         run: npm install
         working-directory: source
 
-      - name: Build & Deploy
+      - name: Build
+        working-directory: source
         run: |
           node -e "
           const Hexo = require('hexo');
-          const hexo = new Hexo(process.cwd(), {silent: false});
-          (async () => {
-            await hexo.init();
-            await hexo.load();
-            await hexo.call('clean');
-            await hexo.call('generate');
-            await hexo.call('deploy');
-            await hexo.exit();
-          })().catch(e => { console.error(e); process.exit(1); });
+          const hexo = new Hexo(process.cwd(), { silent: false });
+          hexo.env.init = true;
+          hexo.init()
+            .then(() => hexo.load())
+            .then(() => hexo.call('generate'))
+            .then(() => { console.log('Generate done'); return hexo.exit(); })
+            .catch(e => { console.error(e); process.exit(1); });
           "
+
+      - name: Deploy
         working-directory: source
         env:
           HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf '%s' "x-access-token:$HEXO_DEPLOYER_GIT_TOKEN" | base64 -w0)"
+          node -e "
+          const Hexo = require('hexo');
+          const hexo = new Hexo(process.cwd(), { silent: false });
+          hexo.env.init = true;
+          hexo.init()
+            .then(() => hexo.load())
+            .then(() => hexo.call('deploy', { force: true }))
+            .then(() => { console.log('Deploy done'); return hexo.exit(); })
+            .catch(e => { console.error(e); process.exit(1); });
+          "
