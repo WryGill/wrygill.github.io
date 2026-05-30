@@ -1,71 +1,71 @@
 # Butterfly 主题配置
 # 导航栏
 nav:
-  logo:
-  display_title: true
-  fixed: true
-  animations: true
+ logo:
+ display_title: true
+ fixed: true
+ animations: true
 
 # 首页
 index:
-  banner: true
-  slogan:
-    enable: true
-    text: 后端开发、编程、生活、随笔
+ banner: true
+ slogan:
+ enable: true
+ text: 后端开发、编程、生活、随笔
 
 # 首页 banner 背景图
 index_img: /img/miku.jpg
 
 # 头像
 avatar:
-  img: /img/aromatic.jpg
-  effect: true
+ img: /img/aromatic.jpg
+ effect: true
 
 # 社交
 social:
-  GitHub: https://github.com/WryGill || fab fa-github
-  Email: mailto:constantblock37@gmail.com || fas fa-envelope
-  QQ: https://qm.qq.com/cgi-bin/qm/qr?k=2086931650 || fab fa-qq
+ GitHub: https://github.com/WryGill || fab fa-github
+ Email: mailto:constantblock37@gmail.com || fas fa-envelope
+ QQ: https://qm.qq.com/cgi-bin/qm/qr?k=2086931650 || fab fa-qq
 
 # 文章
 post:
-  meta:
-    date_type: both
-    categories: true
-    tags: true
-  copyright:
-    enable: true
-    content: 本博客所有文章除特别声明外，均采用 CC BY-NC-SA 4.0 许可协议。转载请注明出处！
+ meta:
+ date_type: both
+ categories: true
+ tags: true
+ copyright:
+ enable: true
+ content: 本博客所有文章除特别声明外，均采用 CC BY-NC-SA 4.0 许可协议。转载请注明出处！
 
 # 文章封面图（从以下图片中随机抽取）
 cover:
-  index_enable: true
-  aside_enable: true
-  archives_enable: true
-  position: both
-  default_cover:
-    - /img/miku_cover_1.jpg
-    - /img/miku_cover_2.jpg
-    - /img/miku_cover_3.jpg
+ index_enable: true
+ aside_enable: true
+ archives_enable: true
+ position: both
+ default_cover:
+ - /img/miku_cover_1.jpg
+ - /img/miku_cover_2.jpg
+ - /img/miku_cover_3.jpg
 
 # 右下角设置
 rightside:
-  readmode: true
-  translate: false
-  darkmode: true
-  aside: true
+ readmode: true
+ translate: false
+ darkmode: true
+ aside: true
 
 # 页脚
 footer:
-  owner:
-    enable: true
-    since: 2025
-  custom_text:
-  copyright: true
+ owner:
+ enable: true
+ since: 2025
+ custom_text:
+ copyright: true
 
 # 字数统计
 wordcount:
-  enable: false
+ enable: false
 
 # 图片大图查看
 fancybox: true
@@ -75,8 +75,13 @@ site_verification:
 
 # Analytics
 analytics:
-  enable: false
+ enable: false
 
 # 广告
 ads:
-  enable: false
+ enable: false
+
+# KaTeX 公式渲染
+katex:
+ enable: true
+ per_page: false
