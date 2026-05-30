@@ -13,8 +13,8 @@ root: /
 permalink: :year/:month/:day/:title/
 permalink_defaults:
 pretty_urls:
-  trailing_index: true
-  trailing_html: true
+ trailing_index: true
+ trailing_html: true
 
 # Directory
 source_dir: source
@@ -31,9 +31,9 @@ new_post_name: :year-:month-:day-:title.md
 default_layout: post
 titlecase: false
 external_link:
-  enable: true
-  field: site
-  exclude: ''
+ enable: true
+ field: site
+ exclude: ''
 filename_case: 0
 render_drafts: false
 post_asset_folder: false
@@ -41,21 +41,21 @@ relative_link: false
 future: true
 syntax_highlighter: highlight.js
 highlight:
-  line_number: true
-  auto_detect: false
-  tab_replace: '  '
-  wrap: true
-  hljs: false
+ line_number: true
+ auto_detect: false
+ tab_replace: ' '
+ wrap: true
+ hljs: false
 prismjs:
-  preprocess: true
-  line_number: true
-  tab_replace: '  '
+ preprocess: true
+ line_number: true
+ tab_replace: ' '
 
 # Home page
 index_generator:
-  path: ''
-  per_page: 10
-  order_by: -date
+ path: ''
+ per_page: 10
+ order_by: -date
 
 # Category & Tag
 default_category: uncategorized
@@ -82,8 +82,15 @@ ignore:
 # Extensions
 theme: butterfly
 
+# Markdown renderer
+markdown:
+ plugins:
+   - markdown-it-texmath
+ options:
+   html: true
+
 # Deployment
 deploy:
-  type: git
-  repo: https://github.com/WryGill/wrygill.github.io.git
-  branch: master
+ type: git
+ repo: https://github.com/WryGill/wrygill.github.io.git
+ branch: master
