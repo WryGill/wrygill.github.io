@@ -81,7 +81,31 @@ analytics:
 ads:
  enable: false
 
-# KaTeX 公式渲染
-katex:
+# 公式渲染
+math:
  enable: true
- per_page: false
+ per_page: true
+ hide_scrollbar: false
+ use: katex
+ mathjax:
+   enableMenu: true
+   tags: none
+ katex:
+   copy_tex: false
+
+# 自定义注入
+inject:
+ head:
+   - <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+   - <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+   - <script>
+       document.addEventListener('DOMContentLoaded', function() {
+         renderMathInElement(document.body, {
+           delimiters: [
+             {left: '$$', right: '$$', display: true},
+             {left: '$', right: '$', display: false}
+           ],
+           throwOnError: false
+         });
+       });
+     </script>
