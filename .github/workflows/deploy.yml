@@ -63,5 +63,12 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf '%s' "x-access-token:$TOKEN" | base64 -w0)"
-          npx hexo deploy
+
+          cd public
+          git init
+          git add -A
+          git commit -m "Site updated: $(date -u '+%Y-%m-%d %H:%M:%S')"
+
+          AUTH="x-access-token:$TOKEN"
+          git remote add origin "https://oauth2:${AUTH}@github.com/WryGill/wrygill.github.io.git"
+          git push --force origin master
