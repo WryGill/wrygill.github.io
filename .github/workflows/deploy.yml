@@ -40,8 +40,6 @@ jobs:
           mkdir -p source/source/_posts
           rm -rf source/source/_posts/*
           cp -r content/posts/*.md source/source/_posts/
-          echo "=== Copied posts ==="
-          ls -la source/source/_posts/
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -55,21 +53,36 @@ jobs:
       - name: Build
         working-directory: source
         run: |
-          npm run clean
-          npm run build
-          echo "=== Generated files ==="
-          ls -la public/ | head -20
+          node -e "
+          const Hexo = require('hexo');
+          const hexo = new Hexo(process.cwd(), { silent: false });
+          hexo.env.init = true;
+          hexo.init()
+            .then(() => hexo.load())
+            .then(() => hexo.call('generate'))
+            .then(() => {
+              console.log('Generate done');
+              const fs = require('fs');
+              const files = fs.readdirSync('public').filter(f => f.endsWith('.html'));
+              console.log('public/ files:', files.length);
+              return hexo.exit();
+            })
+            .catch(e => { console.error('Build error:', e.message); process.exit(1); });
+          "
 
       - name: Deploy
         working-directory: source
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          cd public
-          git init
-          git add -A
-          git commit -m "Site updated: $(date -u '+%Y-%m-%d %H:%M:%S')"
-          git remote add origin "https://oauth2:${TOKEN}@github.com/WryGill/wrygill.github.io.git"
-          git push --force origin master
+          node -e "
+          const Hexo = require('hexo');
+          const hexo = new Hexo(process.cwd(), { silent: false });
+          hexo.env.init = true;
+          hexo.init()
+            .then(() => hexo.load())
+            .then(() => hexo.call('deploy', { force: true }))
+            .then(() => {
+              console.log('Deploy done');
+              return hexo.exit();
+            })
+            .catch(e => { console.error('Deploy error:', e.message); process.exit(1); });
+          "
