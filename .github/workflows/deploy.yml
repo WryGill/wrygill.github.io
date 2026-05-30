@@ -53,8 +53,28 @@ jobs:
         working-directory: source
 
       - name: Generate static files
-        run: npx hexo clean && npx hexo generate
         working-directory: source
+        run: |
+          node -e "
+          const Hexo = require('hexo');
+          const hexo = new Hexo(process.cwd(), { silent: false });
+          hexo.env.init = true;
+          hexo.init()
+            .then(() => hexo.load())
+            .then(() => hexo.call('clean'))
+            .then(() => hexo.call('generate'))
+            .then(() => { console.log('Generate done'); return hexo.exit(); })
+            .catch(e => { console.error(e); process.exit(1); });
+          "
+
+      - name: Verify output
+        working-directory: source
+        run: |
+          echo "public/ contents:"
+          ls -la public/
+          echo "---"
+          echo "index.html size:"
+          wc -c public/index.html 2>/dev/null || echo "NO INDEX.HTML"
 
       - name: Deploy to master
         working-directory: source
@@ -68,6 +88,5 @@ jobs:
           git init
           git add -A
           git commit -m "Site updated: $(date -u '+%Y-%m-%d %H:%M:%S')"
-
           git remote add origin "https://oauth2:${TOKEN}@github.com/WryGill/wrygill.github.io.git"
           git push --force origin master
