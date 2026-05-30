@@ -52,30 +52,15 @@ jobs:
         run: npm install
         working-directory: source
 
-      - name: Build
-        working-directory: source
-        run: |
-          node << 'EOF'
-          const Hexo = require('hexo');
-          const hexo = new Hexo(process.cwd(), { silent: false });
-          hexo.env.init = true;
-          hexo.init()
-            .then(() => hexo.load())
-            .then(() => hexo.call('generate'))
-            .then(() => { console.log('Generate done'); return hexo.exit(); })
-            .catch(e => { console.error(e.message); process.exit(1); });
-          EOF
-
-      - name: Deploy to master
+      - name: Build & Deploy
         working-directory: source
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          npx hexo clean && npx hexo generate
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          cd public
-          git init
-          git add -A
+          cd public && git init && git add -A
           git commit -m "Site updated: $(date -u '+%Y-%m-%d %H:%M:%S')"
           git remote add origin "https://oauth2:${TOKEN}@github.com/WryGill/wrygill.github.io.git"
           git push --force origin master
