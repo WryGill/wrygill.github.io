@@ -82,6 +82,7 @@ ads:
   enable: false
 
 # 数学公式（markdown-it-texmath 服务端渲染，Butterfly 加载 KaTeX CSS）
+# per_page: true 确保所有文章页面自动加载 KaTeX CSS（无需在 front-matter 中声明 katex: true）
 math:
   use: katex
-  per_page: false
+  per_page: true
