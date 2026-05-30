@@ -57,7 +57,26 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx hexo clean && npx hexo generate
+          node -e "
+          const Hexo = require('hexo');
+          const hexo = new Hexo(process.cwd(), { silent: false });
+          hexo.env.init = true;
+          hexo.init()
+            .then(() => hexo.load())
+            .then(() => hexo.call('clean'))
+            .then(() => hexo.call('generate'))
+            .then(() => {
+              console.log('Generate done, public/ files:');
+              const fs = require('fs');
+              const files = fs.readdirSync('public').filter(f => f.endsWith('.html'));
+              files.slice(0,3).forEach(f => {
+                const size = fs.statSync('public/' + f).size;
+                console.log('  ' + f + ': ' + size + ' bytes');
+              });
+              return hexo.exit();
+            })
+            .catch(e => { console.error('Error:', e.message); process.exit(1); });
+          "
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           cd public && git init && git add -A
