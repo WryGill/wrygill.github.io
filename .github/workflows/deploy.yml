@@ -57,32 +57,13 @@ jobs:
         run: |
           node << 'EOF'
           const Hexo = require('hexo');
-          const cwd = process.cwd();
-          console.log('CWD:', cwd);
-          console.log('Node version:', process.version);
-          console.log('Has _config.yml:', require('fs').existsSync(cwd + '/_config.yml'));
-          console.log('Has node_modules:', require('fs').existsSync(cwd + '/node_modules'));
-          const hexo = new Hexo(cwd, { silent: false });
+          const hexo = new Hexo(process.cwd(), { silent: false });
           hexo.env.init = true;
           hexo.init()
-            .then(() => {
-              console.log('Init done');
-              return hexo.load();
-            })
-            .then(() => {
-              console.log('Load done');
-              console.log('Posts:', hexo.model('Post').length());
-              return hexo.call('generate');
-            })
-            .then(() => {
-              console.log('Generate done');
-              return hexo.exit();
-            })
-            .catch(e => {
-              console.error('Error:', e.message);
-              console.error(e.stack);
-              process.exit(1);
-            });
+            .then(() => hexo.load())
+            .then(() => hexo.call('generate'))
+            .then(() => { console.log('Generate done'); return hexo.exit(); })
+            .catch(e => { console.error(e.message); process.exit(1); });
           EOF
 
       - name: Deploy to master
@@ -90,14 +71,8 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "=== public directory ==="
-          ls -la public/ 2>/dev/null || echo "NO public dir"
-          echo "=== index.html ==="
-          wc -c public/index.html 2>/dev/null || echo "NO index.html"
-
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
           cd public
           git init
           git add -A
