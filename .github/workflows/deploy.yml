@@ -55,8 +55,8 @@ jobs:
       - name: Build
         working-directory: source
         run: |
-          npx hexo clean
-          npx hexo generate
+          npm run clean
+          npm run build
           echo "=== Generated files ==="
           ls -la public/ | head -20
 
