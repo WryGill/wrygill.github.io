@@ -52,35 +52,49 @@ jobs:
         run: npm install
         working-directory: source
 
-      - name: Generate static files
+      - name: Build
         working-directory: source
         run: |
-          node -e "
+          node << 'EOF'
           const Hexo = require('hexo');
-          const hexo = new Hexo(process.cwd(), { silent: false });
+          const cwd = process.cwd();
+          console.log('CWD:', cwd);
+          console.log('Node version:', process.version);
+          console.log('Has _config.yml:', require('fs').existsSync(cwd + '/_config.yml'));
+          console.log('Has node_modules:', require('fs').existsSync(cwd + '/node_modules'));
+          const hexo = new Hexo(cwd, { silent: false });
           hexo.env.init = true;
           hexo.init()
-            .then(() => hexo.load())
-            .then(() => hexo.call('clean'))
-            .then(() => hexo.call('generate'))
-            .then(() => { console.log('Generate done'); return hexo.exit(); })
-            .catch(e => { console.error(e); process.exit(1); });
-          "
-
-      - name: Verify output
-        working-directory: source
-        run: |
-          echo "public/ contents:"
-          ls -la public/
-          echo "---"
-          echo "index.html size:"
-          wc -c public/index.html 2>/dev/null || echo "NO INDEX.HTML"
+            .then(() => {
+              console.log('Init done');
+              return hexo.load();
+            })
+            .then(() => {
+              console.log('Load done');
+              console.log('Posts:', hexo.model('Post').length());
+              return hexo.call('generate');
+            })
+            .then(() => {
+              console.log('Generate done');
+              return hexo.exit();
+            })
+            .catch(e => {
+              console.error('Error:', e.message);
+              console.error(e.stack);
+              process.exit(1);
+            });
+          EOF
 
       - name: Deploy to master
         working-directory: source
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "=== public directory ==="
+          ls -la public/ 2>/dev/null || echo "NO public dir"
+          echo "=== index.html ==="
+          wc -c public/index.html 2>/dev/null || echo "NO index.html"
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
