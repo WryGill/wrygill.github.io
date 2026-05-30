@@ -34,14 +34,21 @@ jobs:
           path: content
           sparse-checkout: |
             posts
+            assets
 
-      - name: Copy posts to source
+      - name: Copy posts and assets to source
         run: |
           mkdir -p source/source/_posts
           rm -rf source/source/_posts/*
           cp -r content/posts/*.md source/source/_posts/
+          if [ -d content/assets ]; then
+            rm -rf source/source/assets
+            cp -r content/assets source/source/assets
+          fi
           echo "=== Copied posts ==="
           ls -la source/source/_posts/
+          echo "=== Copied assets ==="
+          ls -la source/source/assets/ 2>/dev/null || echo "(none)"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
