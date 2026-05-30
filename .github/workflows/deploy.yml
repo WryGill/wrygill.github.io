@@ -1,62 +1,62 @@
 name: Hexo Deploy
 
 on:
- push:
- branches:
- - content
- - source
- workflow_dispatch:
+  push:
+    branches:
+      - content
+      - source
+  workflow_dispatch:
 
 concurrency:
- group: hexo-deploy
- cancel-in-progress: false
+  group: hexo-deploy
+  cancel-in-progress: false
 
 permissions:
- contents: write
+  contents: write
 
 jobs:
- build-and-deploy:
- runs-on: ubuntu-latest
- steps:
- - name: Checkout Hexo source
- uses: actions/checkout@v4
- with:
- repository: WryGill/wrygill.github.io
- ref: source
- path: source
- submodules: true
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Hexo source
+        uses: actions/checkout@v4
+        with:
+          repository: WryGill/wrygill.github.io
+          ref: source
+          path: source
+          submodules: true
 
- - name: Checkout blog posts
- uses: actions/checkout@v4
- with:
- repository: WryGill/wrygill.github.io
- ref: content
- path: content
- sparse-checkout: posts
+      - name: Checkout blog posts
+        uses: actions/checkout@v4
+        with:
+          repository: WryGill/wrygill.github.io
+          ref: content
+          path: content
+          sparse-checkout: posts
 
- - name: Copy posts to source
- run: |
- mkdir -p source/source/_posts
- rm -rf source/source/_posts/*
- cp -r content/posts/*.md source/source/_posts/
- echo "=== Copied posts ==="
- ls -la source/source/_posts/
+      - name: Copy posts to source
+        run: |
+          mkdir -p source/source/_posts
+          rm -rf source/source/_posts/*
+          cp -r content/posts/*.md source/source/_posts/
+          echo "=== Copied posts ==="
+          ls -la source/source/_posts/
 
- - name: Setup Node.js
- uses: actions/setup-node@v4
- with:
- node-version: 20
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
- - name: Install dependencies
- run: npm install
- working-directory: source
+      - name: Install dependencies
+        run: npm install
+        working-directory: source
 
- - name: Clean & Generate
- run: npm run clean && npm run build
- working-directory: source
+      - name: Clean & Generate
+        run: npm run build
+        working-directory: source
 
- - name: Deploy to master
- run: npm run deploy
- working-directory: source
- env:
- HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy to master
+        run: npm run deploy
+        working-directory: source
+        env:
+          HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
