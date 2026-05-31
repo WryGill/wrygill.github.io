@@ -2,8 +2,8 @@
 
 /**
  * Convert ```mermaid code blocks to {% mermaid %} tag before markdown rendering.
- * This prevents highlight.js from turning them into <figure class="highlight plaintext">
- * which Butterfly's client-side codeToMermaid() can't find.
+ * Priority must be <9 because hexo-renderer-markdown-it registers at priority 9.
+ * Lower number = runs earlier.
  */
 hexo.extend.filter.register('before_post_render', function (data) {
   data.content = data.content.replace(
@@ -11,4 +11,4 @@ hexo.extend.filter.register('before_post_render', function (data) {
     (match, code) => '{% mermaid %}\n' + code.trim() + '\n{% endmermaid %}'
   )
   return data
-})
+}, 8)
