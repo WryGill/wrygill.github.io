@@ -92,7 +92,7 @@ math:
 # 开启后 ```mermaid 代码块自动渲染为流程图/时序图等
 mermaid:
   enable: true
-  code_write: false  # false = 使用 ```mermaid 代码块语法
+  code_write: true   # true = 使用 ```mermaid 代码块语法
   theme:
     light: default
     dark: dark
