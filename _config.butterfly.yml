@@ -1,8 +1,9 @@
 # Butterfly 主题配置
+
 # 导航栏
 nav:
   logo:
-  display_title: true
+    display_title: true
   fixed: true
   animations: true
 
@@ -86,3 +87,12 @@ ads:
 math:
   use: katex
   per_page: true
+
+# Mermaid 图表
+# 开启后 ```mermaid 代码块自动渲染为流程图/时序图等
+mermaid:
+  enable: true
+  code_write: false  # false = 使用 ```mermaid 代码块语法
+  theme:
+    light: default
+    dark: dark
