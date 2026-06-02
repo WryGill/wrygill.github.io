@@ -270,6 +270,8 @@ print(vec[:5])    # tensor([ 0.0134, -0.0087,  0.0201, -0.0156,  0.0043])
 
 这个查找表是模型的第一个可学习参数。训练过程中，embedding 向量会逐渐学到语义关系——"cat" 和 "dog" 的向量会逐渐靠近，而与 "democracy" 拉远。这个矩阵定义了模型的语义空间：在这个空间里，距离代表语义相似度。
 
+![Embedding 矩阵与语义空间中的向量聚类](/assets/llm-data-pipeline/embedding-space.png)
+
 ### 位置编码：让模型知道顺序
 
 Embedding 解决了语义表示的问题，但还有一个问题：Self-Attention 是排列不变的（permutation invariant）。"猫追狗" 和 "狗追猫" 如果只看 token 集合不看顺序，模型得到的表示完全相同。
@@ -291,6 +293,8 @@ $$PE_{(pos, 2i)} = \sin\left(\frac{pos}{10000^{2i/d}}\right), \quad PE_{(pos, 2i
 $$\mathbf{q}_m^\top \mathbf{k}_n = f(\mathbf{x}_m, \mathbf{x}_n, m-n)$$
 
 具体做法是将 $d$ 维向量两两配对，每对按位置旋转不同角度。RoPE 成为标准的原因有三：相对位置编码天然支持不同序列长度；通过 NTK-aware 插值可以外推到训练时未见过的长度；计算开销小，直接作用在 Q/K 上，不增加额外参数。
+
+![正弦位置编码与 RoPE 旋转编码对比](/assets/llm-data-pipeline/positional-encoding.png)
 
 ### Embedding 层的工程参数
 
