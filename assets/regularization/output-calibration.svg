@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520">
+  <rect width="980" height="520" rx="28" fill="#f8fafc"/>
+  <text x="70" y="70" font-family="Inter, Arial" font-size="25" font-weight="700" fill="#111827">Output distribution calibration</text>
+  <text x="70" y="100" font-family="Inter, Arial" font-size="15" fill="#6b7280">hard labels and overconfident predictions produce sharp distributions</text>
+
+  <rect x="65" y="135" width="260" height="310" rx="22" fill="#ffffff" stroke="#e5e7eb"/>
+  <rect x="360" y="135" width="260" height="310" rx="22" fill="#ffffff" stroke="#e5e7eb"/>
+  <rect x="655" y="135" width="260" height="310" rx="22" fill="#ffffff" stroke="#e5e7eb"/>
+
+  <text x="128" y="170" font-family="Inter, Arial" font-size="18" font-weight="700" fill="#374151">hard target</text>
+  <text x="410" y="170" font-family="Inter, Arial" font-size="18" font-weight="700" fill="#374151">model prediction</text>
+  <text x="704" y="170" font-family="Inter, Arial" font-size="18" font-weight="700" fill="#374151">smoothed target</text>
+
+  <g font-family="Inter, Arial" font-size="13" fill="#6b7280" text-anchor="middle">
+    <text x="130" y="412">dog</text><text x="195" y="412">cat</text><text x="260" y="412">car</text>
+    <text x="425" y="412">dog</text><text x="490" y="412">cat</text><text x="555" y="412">car</text>
+    <text x="720" y="412">dog</text><text x="785" y="412">cat</text><text x="850" y="412">car</text>
+  </g>
+
+  <g>
+    <line x1="100" y1="380" x2="290" y2="380" stroke="#e5e7eb"/>
+    <rect x="113" y="380" width="34" height="0" fill="#94a3b8"/>
+    <rect x="178" y="205" width="34" height="175" rx="5" fill="#2563eb"/>
+    <rect x="243" y="380" width="34" height="0" fill="#94a3b8"/>
+    <text x="195" y="196" font-family="Inter, Arial" font-size="13" text-anchor="middle" fill="#2563eb">1.0</text>
+  </g>
+
+  <g>
+    <line x1="395" y1="380" x2="585" y2="380" stroke="#e5e7eb"/>
+    <rect x="408" y="375" width="34" height="5" rx="3" fill="#94a3b8"/>
+    <rect x="473" y="211" width="34" height="169" rx="5" fill="#ef4444"/>
+    <rect x="538" y="379" width="34" height="1" rx="1" fill="#94a3b8"/>
+    <text x="490" y="202" font-family="Inter, Arial" font-size="13" text-anchor="middle" fill="#ef4444">0.9644</text>
+  </g>
+
+  <g>
+    <line x1="690" y1="380" x2="880" y2="380" stroke="#e5e7eb"/>
+    <rect x="703" y="374" width="34" height="6" rx="3" fill="#94a3b8"/>
+    <rect x="768" y="217" width="34" height="163" rx="5" fill="#16a34a"/>
+    <rect x="833" y="374" width="34" height="6" rx="3" fill="#94a3b8"/>
+    <text x="785" y="208" font-family="Inter, Arial" font-size="13" text-anchor="middle" fill="#16a34a">0.9333</text>
+  </g>
+</svg>
