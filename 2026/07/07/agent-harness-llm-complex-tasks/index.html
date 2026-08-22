@@ -1,0 +1,617 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Agent Harness 如何驱动 LLM 解决复杂任务 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="同一个 LLM，放在聊天框里和放在 Agent Harness 里，面对同一个任务表现可以差很远。 让一个普通聊天模型修测试失败。它会解释可能的原因——某个分支没判空、测试断言过期或者环境配置不一致。然后停下来等你决定下一步。 把它放进 Harness 里，同一模型会先跑测试，读错误堆栈，打开源文件，定位问题，修改代码，再跑一次验证。如果新错误出现，它继续处理。 两套输出来自同一个模型。决定表现">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Agent Harness 如何驱动 LLM 解决复杂任务">
+<meta property="og:url" content="https://wrygill.github.io/2026/07/07/agent-harness-llm-complex-tasks/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="同一个 LLM，放在聊天框里和放在 Agent Harness 里，面对同一个任务表现可以差很远。 让一个普通聊天模型修测试失败。它会解释可能的原因——某个分支没判空、测试断言过期或者环境配置不一致。然后停下来等你决定下一步。 把它放进 Harness 里，同一模型会先跑测试，读错误堆栈，打开源文件，定位问题，修改代码，再跑一次验证。如果新错误出现，它继续处理。 两套输出来自同一个模型。决定表现">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_3.jpg">
+<meta property="article:published_time" content="2026-07-07T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-22T14:22:57.904Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="Agent">
+<meta property="article:tag" content="Engineering">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_3.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Agent Harness 如何驱动 LLM 解决复杂任务",
+  "url": "https://wrygill.github.io/2026/07/07/agent-harness-llm-complex-tasks/",
+  "image": "https://wrygill.github.io/img/miku_cover_3.jpg",
+  "datePublished": "2026-07-07T16:00:00.000Z",
+  "dateModified": "2026-08-22T14:22:57.904Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/07/07/agent-harness-llm-complex-tasks/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Agent Harness 如何驱动 LLM 解决复杂任务',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_3.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">Agent Harness 如何驱动 LLM 解决复杂任务</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">Agent Harness 如何驱动 LLM 解决复杂任务</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-07T16:00:00.000Z" title="发表于 2026-07-08 00:00:00">2026-07-08</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-22T14:22:57.904Z" title="更新于 2026-08-22 22:22:57">2026-08-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/Engineering/">Engineering</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>同一个 LLM，放在聊天框里和放在 Agent Harness 里，面对同一个任务表现可以差很远。</p>
+<p>让一个普通聊天模型修测试失败。它会解释可能的原因——某个分支没判空、测试断言过期或者环境配置不一致。然后停下来等你决定下一步。</p>
+<p>把它放进 Harness 里，同一模型会先跑测试，读错误堆栈，打开源文件，定位问题，修改代码，再跑一次验证。如果新错误出现，它继续处理。</p>
+<p>两套输出来自同一个模型。决定表现的差异不在模型内部，在模型外那层软件框架里。</p>
+</blockquote>
+<p>Sebastian Raschka 在他 2026 年 4 月的文章里给过一个直接的说法：“I suspect that if we dropped one of the latest, most capable open-weight LLMs, such as GLM-5, into a similar harness, it could likely perform on par with GPT-5.4 in Codex or Claude Opus 4.6 in Claude Code。”</p>
+<p>这句话不是在夸模型迭代多快，是在说：<strong>Agent Harness 的品质对最终任务表现的影响，可能不亚于模型升级。</strong> 它解释了为什么同一个模型在 chat 界面里只会回答，在 Claude Code 或 Codex CLI 里却能修 bug、做重构、走通一整套工程流程。</p>
+<p>Harness 不是一个外层包装箱。它是把 LLM 从单次文本生成器驱动成持续执行系统的那层软件基础设施。<a target="_blank" rel="noopener" href="http://Parallel.ai">Parallel.ai</a> 的定义更彻底——“everything except the LLM itself”。</p>
+<p>这篇文章不打算展开整个 Harness Engineering 的概念谱系，只讲三个工程切口：回路怎么建立，信息怎么分层，边界和分工怎么设计。</p>
+<h2 id="一、执行回路">一、执行回路</h2>
+<p>复杂任务很难用一个 prompt 一次性解决。修一个测试的背后是一串动作：跑测试拿失败信号，读错误堆栈找到问题文件，搜索相关代码建立上下文，修改实现，再次运行验证。每一步都是在上一步的基础上推进，而不能提前计划好。</p>
+<p>这个问题本质上和 LLM 的生成方式有关——它生成下一个 token 时能看到前面的所有 token，但它看不到未来的执行结果。没有工具反馈，它的规划只能停在文本层：可以写出一个看起来不错的修复路线，但不知道测试有没有真的通过，不知道改动有没有破坏其他路径。</p>
+<p>Agent Harness 解决这个问题的办法是让 LLM 进入一个执行回路。</p>
+<p>Claude Code 官方文档把核心工作方式描述为三个阶段：<strong>gather context、take action、verify results</strong>。这三个阶段不是顺序执行的，而是每轮工具调用都会走一遍：看到新信息（gather），决定做什么（take action），观察结果（verify），然后决定下一步。<a target="_blank" rel="noopener" href="http://Parallel.ai">Parallel.ai</a> 把这套回路拆得更细一些——Intent Capture、Tool Call Execution、Context Management、Verification、Handoff——五个阶段形成了一个闭环，每一步的输出都可能改变下一步的方向。</p>
+<p>从工程角度看，这个回路在做一件简单但关键的事：让 LLM 每次输出都变成可以被环境验证的动作。</p>
+<ul>
+<li>模型输出 <code>run tests</code> → Harness 执行并返回输出</li>
+<li>模型根据输出决定 <code>read_file(&quot;src/foo.py&quot;)</code> → Harness 返回文件内容</li>
+<li>模型判断问题位置并 emit <code>edit</code> → Harness 应用到文件系统</li>
+<li>模型再次触发 <code>run tests</code> → Harness 返回新结果</li>
+</ul>
+<p>每一步都在真实环境里落地，再把结果写回上下文。输出不再是最终答案，而是任务推进过程中的一个中间状态。</p>
+<p>Sebastian Raschka 在他的 Mini Coding Agent 实现里放了一个 Live Repo Context 组件，每次启动时自动收集 git 状态、README、<a target="_blank" rel="noopener" href="http://AGENTS.md">AGENTS.md</a> 等工作区摘要。这不是 prompt 技巧，是 Harness 层在模型任何判断之前，先做一次环境快照。模型的第一轮输入就已经包含了仓库的当前状况，而不需要靠猜测。</p>
+<p>LangChain 的文章说 “Bash + code exec is a big step towards giving models a computer。” 本质上，Harness 给了 LLM 一个可以观察和操作的世界，而模型每一次输出都变成了这个世界的真实操作。</p>
+<p>回路一旦建立起来，复杂任务的执行就变成了「感知－判断－动作－验证」的反复交织。反馈真实，模型才能收敛到正确的方向上。但回路每跑一轮都会产生新信息——日志、代码片段、搜索结果、中间假设——这些信息如果全部留存在上下文里，多轮之后任务会被噪音拖垮。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph TD
+    Goal[用户目标] --&gt; Observe[观察现场]
+    Observe --&gt; Judge[形成判断]
+    Judge --&gt; Act[执行动作]
+    Act --&gt; Verify[验证结果]
+    Verify --&gt;|新失败| Observe
+    Verify --&gt;|通过| Done[任务收敛]
+  </pre></div>
+<h2 id="二、上下文分层">二、上下文分层</h2>
+<p>Anthropic 在 2025 年 9 月发布了一篇工程博客，专门讲 context engineering。里面有一个核心观察：transformer 的注意力机制是 n² 的，token 越多 recall 越差。这不是等上下文窗口满了才出问题，而是从加载第一个额外 token 就开始退化。他们把这种现象叫做 <strong>context rot</strong>——信息退化，不是信息溢出。</p>
+<p>这就意味着，让模型在多轮工具调用后仍然能做出正确判断，不是靠塞更多 token，而是靠让上下文里的 token 更相关。</p>
+<p>Claude Code 的做法是做 compaction。官方博客描述得很具体：当上下文窗口接近上限时，Harness 主动压缩——丢弃冗余的工具调用记录和输出，只保留最近 5 个访问过的文件和一段结构化摘要，然后重新开始一轮上下文。注意，这个决策是 Harness 层做的，不是模型自己判断哪些内容可以丢。</p>
+<p>更底层的信息分层不只在 compaction 时才发生。Anthropic 的文章还提到了两种策略：</p>
+<ul>
+<li><strong>JIT context loading</strong>：模型不预加载所有信息，而是通过轻量级工具（文件大小、命名约定、目录结构）先判断哪些值得读，再按需读入。这比把整个工作区都塞进 prompt 给模型要高效。一个只读少量关键配置文件和按需取文件的模式，远好于试图加载全部。</li>
+<li><strong>Progressive disclosure</strong>：先用低成本方式获取概况，再决定是否深入。这对应人类工程师的工作习惯——先看目录结构，再决定打开哪个文件，而不是同时读所有文件。</li>
+</ul>
+<p>Sebastian Raschka 的 prompt 设计理念也基于类似的分层：把上下文切成 <strong>Stable Prompt Prefix</strong>（工具描述、工作区摘要——基本不变，可以缓存）和 <strong>Changing Session State</strong>（用户最新请求、最近几轮工具结果）。前者节省每次的 token 消耗，后者保持当前任务的连续性。</p>
+<p>LangChain 的文章则指出 filesystem 是 Harness 最基础的上下文管理原语。Git 提供版本记录，<a target="_blank" rel="noopener" href="http://AGENTS.md">AGENTS.md</a> / <a target="_blank" rel="noopener" href="http://CLAUDE.md">CLAUDE.md</a> 提供跨会话知识，工作区文件是自然的信息载体。Harness 不需要把所有信息塞进 prompt——它只需要让模型知道信息在哪里、怎么取。</p>
+<p>信息生命周期在这里大致分三层：</p>
+<ul>
+<li><strong>跨会话层</strong>：<a target="_blank" rel="noopener" href="http://CLAUDE.md">CLAUDE.md</a>、<a target="_blank" rel="noopener" href="http://AGENTS.md">AGENTS.md</a>、项目约定——每次会话都加载但不频繁变化</li>
+<li><strong>任务现场层</strong>：当前目标、已修正的文件、待验证假设——当前会话持有时更新</li>
+<li><strong>临时证据层</strong>：单次工具调用返回结果、错误输出、搜索摘要——用完可丢弃</li>
+</ul>
+<p>这三层对应不同的管理策略。第一层靠每次启动时注入，第二层靠 compaction 和摘要保持，第三层靠 progressive disclosure 和结果截断处理。Anthropic 的文章给了这段话一个精练的指导原则：<strong>“Find the smallest possible set of high-signal tokens.”</strong></p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph TD
+    subgraph 临时证据层
+        T1[工具输出 错误日志 搜索摘要]:::temp
+    end
+    subgraph 任务现场层
+        S1[当前目标 已修改文件 待验证假设]:::session
+    end
+    subgraph 跨会话层
+        L1[CLAUDE.md 项目约定 编码规范]:::persist
+    end
+
+    classDef persist fill:#fff8e1,stroke:#ff9800,stroke-width:2px,color:#333
+    classDef session fill:#f0f4ff,stroke:#5b8def,stroke-width:2px,color:#333
+    classDef temp fill:#f5f5f5,stroke:#9e9e9e,stroke-width:2px,color:#333
+  </pre></div>
+<p>但当模型能观察、能跨多轮、能记住以后，它就能真实改变环境。这时下一个问题就会出现：一个能写文件和跑命令的模型，也会把错误判断执行得很彻底。</p>
+<h2 id="三、边界与分工">三、边界与分工</h2>
+<p>执行回路和上下文分层让 LLM 能够持续推进复杂任务，但也带来了两类风险。</p>
+<p>第一类是操作风险。LLM 可能误写关键配置文件、执行不安全命令、访问越权路径。这些错误在 chat 模式下最多给出坏建议，但在 Harness 模式下可能直接破坏系统状态。</p>
+<p>第二类是上下文污染风险。长任务中的探索过程会大量消耗上下文——读十几个文件、排除三条错误假设、做两次局部重构尝试。如果所有中间结果都留在主线上下文里，等到真正定位到根因时，上下文里已经堆满了无用信息。</p>
+<p>Agent Harness 对这两种风险的应对，分别是权限与 Hooks、sub-agent 分工。</p>
+<h3 id="权限验证">权限验证</h3>
+<p>Sebastian Raschka 在归纳 coding agent 的六大组件时，把工具验证和权限作为一个独立层次来描述。模型发出工具调用后，Harness 不是直接执行，而是走一个检查链：工具是否已知 → 参数是否合法 → 文件路径是否在工作区内 → 操作是否需要用户批准。每一步都可能阻止这次调用或要求人工确认。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph LR
+    Call[模型工具调用] --&gt; C1{工具已知?}
+    C1 --&gt;|否| Block[拦截]
+    C1 --&gt;|是| C2{参数合法?}
+    C2 --&gt;|否| Block
+    C2 --&gt;|是| C3{路径安全?}
+    C3 --&gt;|否| Block
+    C3 --&gt;|是| C4{需要审批?}
+    C4 --&gt;|是| Approve[人工确认]
+    C4 --&gt;|否| Exec[执行]
+    Approve --&gt;|通过| Exec
+    Approve --&gt;|拒绝| Block
+  </pre></div>
+<p>Claude Code 的 Hooks 提供了更细粒度的控制。PreToolUse hook 可以在工具即将执行前触发——匹配写入工具，检查目标路径是否为 <code>.env</code>，如果命中则返回 deny。这意味着敏感操作不在模型的能力范围内，而是在模型和系统之间由 Harness 层拦截。</p>
+<p>LangChain 文章从另一个角度讨论这个问题：sandbox。提供隔离的文件系统和网络环境，模型可以自由操作但不会影响生产系统。这和安全验证是互补的——验证拦截已知风险，sandbox 隔离未知风险。</p>
+<h3 id="Sub-agent-分工">Sub-agent 分工</h3>
+<p>长任务里，探索污染和主线保持之间的矛盾天然存在。主线需要干净和连续，探索需要充分和试错。把两者塞进同一个上下文窗口会导致两件事都做不好。</p>
+<p>Anthropic 的工程博客描述了这个工程模式：主 agent 协调整个任务，把深度探索交给专门的 sub-agent。每个 sub-agent 有独立的上下文窗口和工具权限，做完后只返回一段结构化的结果摘要——官方提到大约 1000-2000 token——给主线。探索过程中的噪音在 sub-agent 的上下文里消耗掉，不会出现在主线的判断路径上。</p>
+<p>这种设计和并行没有直接关系。它解决的是上下文的隔离问题。主线负责保持目标、约束和最终决策，sub-agent 负责消耗噪音并返回结构化结论。</p>
+<h3 id="三者合起来才能工作">三者合起来才能工作</h3>
+<p>回路、上下文分层、边界分工这三层不是独立的组件，而是互为前提：</p>
+<ul>
+<li>没有回路，模型无法接触真实环境</li>
+<li>没有上下文分层，多轮任务无法持续</li>
+<li>没有边界和分工，能动手的模型要么不安全，要么在大任务里被噪音冲散</li>
+</ul>
+<p>LangChain 文章里有一句总结恰当：<strong>“Harnesses today are largely delivery mechanisms for good context engineering。”</strong> 如果把上下文工程理解为信息的生命周期管理——什么信息在什么时候进入、什么时候留下、什么时候丢弃——那回路就是让信息流动的管道，边界和分工就是控制每股信息流向的阀门和路线。</p>
+<hr>
+<p>Agent Harness 不是给 LLM 套了一层 UI 卡壳，也不是简单地组合工具、记忆、规划几个模块。它真正在做的事情是：建立一个让 LLM 的输出能够进入真实环境、被验证、被反馈、被管理、被约束的工程系统。</p>
+<p>Sebastian Raschka 多次提到一个观点——“a lot of apparent ‘model quality’ is really context quality。” 模型的迭代当然在推动 Agent 的能力边界，但在当前阶段，同等模型在不同 Harness 里的表现差距，很大程度上来自回路设计、上下文工程和控制机制的成熟度，而不是一个模型的 prompt 写得更长。</p>
+<p>这也是这篇文章想表达的主线：讨论 Agent 能力时，问题不该只停在模型是不是更强。更有工程价值的问题是：它能不能看到现场、能不能把判断带到环境里、能不能在几十轮之后还记得目标和约束、能不能在出错时被拦下来。</p>
+<p><strong>参考资料</strong></p>
+<ul>
+<li>Anthropic, “Effective Context Engineering for AI Agents,” Sep 2025. <a target="_blank" rel="noopener" href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents</a></li>
+<li><a target="_blank" rel="noopener" href="http://Parallel.ai">Parallel.ai</a>, “What is an agent harness in the context of large-language models?,” Dec 2025. <a target="_blank" rel="noopener" href="https://parallel.ai/articles/what-is-an-agent-harness">https://parallel.ai/articles/what-is-an-agent-harness</a></li>
+<li>Sebastian Raschka, “Components of A Coding Agent,” Apr 2026. <a target="_blank" rel="noopener" href="https://magazine.sebastianraschka.com/p/components-of-a-coding-agent">https://magazine.sebastianraschka.com/p/components-of-a-coding-agent</a></li>
+<li>Vivek Trivedy (LangChain), “The Anatomy of an Agent Harness,” 2026. <a target="_blank" rel="noopener" href="https://www.langchain.com/blog/the-anatomy-of-an-agent-harness">https://www.langchain.com/blog/the-anatomy-of-an-agent-harness</a></li>
+<li>Claude Code documentation. <a target="_blank" rel="noopener" href="https://code.claude.com/docs/en/how-claude-code-works">https://code.claude.com/docs/en/how-claude-code-works</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/07/07/agent-harness-llm-complex-tasks/">https://wrygill.github.io/2026/07/07/agent-harness-llm-complex-tasks/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/Agent/">Agent</a><a class="post-meta__tags" href="/tags/Engineering/">Engineering</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_3.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img class="cover" src="/img/miku_cover_1.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">vLLM 推理计算图</div></div><div class="info-2"><div class="info-item-1"> 同一个 Transformer 模型，连续两轮 Decode 执行的层结构几乎完全一致。第一轮可能有 32 条序列参与计算，下一轮只剩 27 条，同时又有一段新 Prompt 等待 Prefill。模型权重没有改变，参与计算的 Token、KV Cache 位置和 Attention 元数据却全部发生了变化。 这正是 LLM 推理计算图面对的基本矛盾：模型结构相对稳定，在线负载持续变化。  直接调用 PyTorch 模型时，一次前向可以简化为输入 Tensor 经过若干算子后产生 Logits。推理框架面对的工作更多：它要持续接收请求、组织批次、分配 KV Cache、执行模型、采样 Token，再把未完成的序列送入下一轮调度。即使模型层没有变化，每轮前向的输入形状和运行时状态也可能不同。 计算图提供了一种处理这种矛盾的方式。框架先把模型前向表示成可分析的图，在其中识别稳定结构、改写算子并生成 Kernel；随后从 GPU 执行序列中选择适合捕获的部分，用 CUDA Graph 降低重复提交的成本。调度器仍然保留动态决策能力，并在每轮执行前准备新的输入与元数据。 理解 vLLM...</div></div></div></a><a class="pagination-related" href="/2026/06/29/regularization/" title="Regularization：从背题到泛化"><img class="cover" src="/img/miku_cover_2.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Regularization：从背题到泛化</div></div><div class="info-2"><div class="info-item-1"> 最烦人的训练曲线不是 loss 爆炸。 loss 爆炸至少很诚实：学习率太大、梯度溢出、数据有脏样本，问题通常摆在明面上。更麻烦的是另一种情况：train loss 一路下降，val loss 却从某个 checkpoint 开始慢慢抬头。 训练日志还在告诉你模型变好了，验证集已经在提醒你：它学偏了。   一、泛化误差与过拟合信号 训练初期，两条曲线通常会一起下降。这个阶段很好判断：模型还在学通用模式，词和词之间的搭配、图像里的边缘和纹理、分类任务里的主要判别特征，都会同时改善训练集和验证集。 真正容易误判的是分叉之后。train loss 继续下降，val loss 反而上升。训练集还在给模型发奖励，验证集已经开始扣分。 这类曲线有欺骗性。你看 optimizer，没有异常；看梯度，没有爆；看训练 loss，还在变好。问题不在模型不学习，问题在它开始学习那些只对训练集有用的东西。 1234step 1000: train loss = 2.41, val loss = 2.50step 2000: train loss = 1.92, val loss = 2.05step ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/05/28/KV-Cache%E5%92%8CPrompt-Cache%E7%9A%84%E5%8C%BA%E5%88%AB/" title="KV Cache 和 Prompt Cache 的区别"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-05-28</div><div class="info-item-2">KV Cache 和 Prompt Cache 的区别</div></div><div class="info-2"><div class="info-item-1">KV Cache 和 Prompt Cache 的区别 如果你用过 OpenAI 的 API，可能注意过响应里偶尔会出现这么一个字段： 12345678&quot;usage&quot;: &#123;  &quot;prompt_tokens&quot;: 2006,  &quot;completion_tokens&quot;: 300,  &quot;total_tokens&quot;: 2306,  &quot;prompt_tokens_details&quot;: &#123;    &quot;cached_tokens&quot;: 1920  &#125;&#125; 明明 prompt 一样长，但 cached_tokens 显示这 2006 个 token 里有 1920 个命中了缓存——意味着你只需要为 86 个 token 付全价，剩下的按折扣价算。 再翻翻 vLLM 或者 HuggingFace 的推理教程，又会频繁撞见另一个词：KV Cache。文档里说它是推理加速的核心，vLLM 的 PagedAttention 本质上就是在管理 KV Cach...</div></div></div></a><a class="pagination-related" href="/2026/06/09/transformer-architecture/" title="Transformer 架构与注意力机制"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-10</div><div class="info-item-2">Transformer 架构与注意力机制</div></div><div class="info-2"><div class="info-item-1"> 第一篇结束时，每个 token 是一个 ddd 维向量。“cat” 和 “dog” 在语义空间里距离很近，但它们各自的向量是独立的——token iii 不知道序列里还有 token jjj。 “The animal didn’t cross the street because it was too tired.” 模型处理到 “it” 时，怎么知道 “it” 指的是 “animal” 而不是 “street”？ Transformer 要解决的只有一件事：让每个 token 的最终表示融合整个序列的上下文。   一、Self-Attention 机制 给定一个长度为 NNN 的 token 序列，每个 token 对应一个 ddd 维向量。要让 tokeni_ii​ 的表示融合其他 token 的信息，最直接的想法是加权平均——权重由 tokeni_ii​ 和 tokenj_jj​ 的相似度决定。这就是 Self-Attention 的起点。 QKV 注意力分数 输入矩阵 X∈RN×dX \in \mathbb{R}^{N \times d}X∈RN×d（NNN 个 tok...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1"> 一个 Llama 2 7B 模型，FP16 权重 13GB。把它装进 A100 40GB，看上去绰绰有余。batch size 拉到 8，上下文设 4096，跑两步 OOM 了。13GB 的模型在 40GB 的卡上怎么会爆？ 原因是显存的主体不止权重。KV Cache 随请求数和上下文长度线性增长，注意力中间结果随序列长度平方膨胀，框架的 workspace、通信 buffer 还要再吃一块。三块加起来，部署前不算清楚，运维线上就要在 dashboard 里看 OOM 告警。 这篇文章回答一个具体问题：给定模型、上下文长度和并发请求数，一张卡到底会占多少显存。  一、权重的显存 最直觉的部分。模型的参数量 NNN 是一个固定数字，权重显存等于参数量乘以每个参数占的字节数： WeightMem=N×bytes/param\text{WeightMem} = N \times \text{bytes/param}WeightMem=N×bytes/paramLlama 2 7B 标称 7B，实际参数量约 6.7B（含 embedding 与每一层的 attention/FFN 矩阵...</div></div></div></a><a class="pagination-related" href="/2026/06/29/regularization/" title="Regularization：从背题到泛化"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-30</div><div class="info-item-2">Regularization：从背题到泛化</div></div><div class="info-2"><div class="info-item-1"> 最烦人的训练曲线不是 loss 爆炸。 loss 爆炸至少很诚实：学习率太大、梯度溢出、数据有脏样本，问题通常摆在明面上。更麻烦的是另一种情况：train loss 一路下降，val loss 却从某个 checkpoint 开始慢慢抬头。 训练日志还在告诉你模型变好了，验证集已经在提醒你：它学偏了。   一、泛化误差与过拟合信号 训练初期，两条曲线通常会一起下降。这个阶段很好判断：模型还在学通用模式，词和词之间的搭配、图像里的边缘和纹理、分类任务里的主要判别特征，都会同时改善训练集和验证集。 真正容易误判的是分叉之后。train loss 继续下降，val loss 反而上升。训练集还在给模型发奖励，验证集已经开始扣分。 这类曲线有欺骗性。你看 optimizer，没有异常；看梯度，没有爆；看训练 loss，还在变好。问题不在模型不学习，问题在它开始学习那些只对训练集有用的东西。 1234step 1000: train loss = 2.41, val loss = 2.50step 2000: train loss = 1.92, val loss = 2.05step ...</div></div></div></a><a class="pagination-related" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1"> 一条 100K 上下文的请求，在 Llama-3-70B（bf16）上会产生约 33GB 的 KV Cache。Prefill 与 Decode 分离部署后，这些数据必须在首 Token 返回之前搬到另一台机器。按 400G InfiniBand 端口的理论带宽估算，全量传输需要约 0.66 秒，而 TTFT 的预算通常只有几百毫秒。 训练侧面对的是同一挑战的另一种形态。一次梯度 AllReduce 要求上千张 GPU 同步完成收发，任何一张卡的迟到都由全体承担。 两类负载调用的协议栈几乎不重叠，回答的却是同一个问题：数据还要被搬几次，每次要等多久。  NCCL、RDMA、InfiniBand、RoCE、NVLink、NIXL、gRPC——这些名词在 AI Infra 的文档里通常以速查表的形式并列出现。速查表能解释名词，应付不了选型。换一张网卡、换一种并行度、把 Prefill 拆出去，每一步都要判断通信栈的哪一层会受影响。 下面分层组织，从物理通路开始逐层向上。箭头代表调用关系：传输与互联是公共底座，训练与推理各自向下取用。      flowchart TB     A[...</div></div></div></a><a class="pagination-related" href="/2026/06/01/mixed-precision/" title="Mixed Precision：从 FP32 到 FP8"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-01</div><div class="info-item-2">Mixed Precision：从 FP32 到 FP8</div></div><div class="info-2"><div class="info-item-1">Mixed Precision：从 FP32 到 FP8  一台 A100 80GB，一个 7B 模型。参数 28GB，梯度 28GB，Adam 的 mtm_tmt​ 和 vtv_tvt​ 共 56GB——合计 112GB。一张卡放不下，还没开始训练显存就先不够了。  一、训练时的显存分布 先把 FP32 训练的显存拆开算一遍。 一个 7B 模型，参数量 N=7×109N = 7 \times 10^9N=7×109，每个参数占 4 字节（FP32），参数本身 4N≈28GB4N \approx 28\text{GB}4N≈28GB。梯度与参数同 shape，又是 28GB。 但真正的大头是优化器状态。Adam 维护两个 FP32 buffer： mt=β1⋅mt−1+(1−β1)⋅gt（一阶矩）m_t = \beta_1 \cdot m_{t-1} + (1 - \beta_1) \cdot g_t \qquad \text{（一阶矩）}mt​=β1​⋅mt−1​+(1−β1​)⋅gt​（一阶矩）vt=β2⋅vt−1+(1−β2)⋅gt2（二阶矩）v_t = \beta_2 \...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">29</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">34</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E6%89%A7%E8%A1%8C%E5%9B%9E%E8%B7%AF"><span class="toc-number">1.</span> <span class="toc-text">一、执行回路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E4%B8%8A%E4%B8%8B%E6%96%87%E5%88%86%E5%B1%82"><span class="toc-number">2.</span> <span class="toc-text">二、上下文分层</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E8%BE%B9%E7%95%8C%E4%B8%8E%E5%88%86%E5%B7%A5"><span class="toc-number">3.</span> <span class="toc-text">三、边界与分工</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9D%83%E9%99%90%E9%AA%8C%E8%AF%81"><span class="toc-number">3.1.</span> <span class="toc-text">权限验证</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Sub-agent-%E5%88%86%E5%B7%A5"><span class="toc-number">3.2.</span> <span class="toc-text">Sub-agent 分工</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E8%80%85%E5%90%88%E8%B5%B7%E6%9D%A5%E6%89%8D%E8%83%BD%E5%B7%A5%E4%BD%9C"><span class="toc-number">3.3.</span> <span class="toc-text">三者合起来才能工作</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="vLLM 推理计算图"/></a><div class="content"><a class="title" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图">vLLM 推理计算图</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

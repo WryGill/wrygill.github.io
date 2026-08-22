@@ -1,0 +1,639 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="一台 A100 提供 40 GB 显存，跑 OPT 13B 模型（FP16 权重 26 GB），剩余 14 GB 全部给 KV cache。按现有框架的默认做法，每个请求按 max sequence length 2048 预留连续内存，单请求 1.6 GB，14 GB 同时容纳 8 路并发；但这 8 路里平均输出只有 200 token，实际占用的内存不到 160 MB，其余 1.44 GB">
+<meta property="og:type" content="article">
+<meta property="og:title" content="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">
+<meta property="og:url" content="https://wrygill.github.io/2026/08/04/pagedattn-radixattn/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="一台 A100 提供 40 GB 显存，跑 OPT 13B 模型（FP16 权重 26 GB），剩余 14 GB 全部给 KV cache。按现有框架的默认做法，每个请求按 max sequence length 2048 预留连续内存，单请求 1.6 GB，14 GB 同时容纳 8 路并发；但这 8 路里平均输出只有 200 token，实际占用的内存不到 160 MB，其余 1.44 GB">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_2.jpg">
+<meta property="article:published_time" content="2026-08-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-22T14:22:57.904Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="推理优化">
+<meta property="article:tag" content="AI-Infra">
+<meta property="article:tag" content="vLLM">
+<meta property="article:tag" content="SGLang">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_2.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention",
+  "url": "https://wrygill.github.io/2026/08/04/pagedattn-radixattn/",
+  "image": "https://wrygill.github.io/img/miku_cover_2.jpg",
+  "datePublished": "2026-08-04T16:00:00.000Z",
+  "dateModified": "2026-08-22T14:22:57.904Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/08/04/pagedattn-radixattn/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_2.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-22T14:22:57.904Z" title="更新于 2026-08-22 22:22:57">2026-08-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infrastructure/">AI Infrastructure</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>一台 A100 提供 40 GB 显存，跑 OPT 13B 模型（FP16 权重 26 GB），剩余 14 GB 全部给 KV cache。按现有框架的默认做法，每个请求按 max sequence length 2048 预留连续内存，单请求 1.6 GB，14 GB 同时容纳 8 路并发；但这 8 路里平均输出只有 200 token，实际占用的内存不到 160 MB，其余 1.44 GB 全程空着等分配上限到来。</p>
+<p>同一份带固定 system prompt 的多轮对话负载分别在 vLLM 和 SGLang 上跑，第一个 token 延迟差 10–20%。差距不出在模型权重，也不出在 GPU 型号，而出在缓存 KV 时背后用的数据结构。</p>
+</blockquote>
+<p>这篇文章讲两件事：vLLM 的 PagedAttention 怎么把 KV cache 从&quot;一段连续显存&quot;改造成&quot;按块非连续存放&quot;，SGLang 的 RadixAttention 又怎么在块状 KV 之上把&quot;跨请求自动复用&quot;做成了树形索引。两者经常被并列提起，但它们处在栈的不同层——前者管内存，后者管复用。</p>
+<h2 id="一、连续内存的碎片代价">一、连续内存的碎片代价</h2>
+<p>要理解 PagedAttention 解决了什么，先看清旧的连续分配到底浪费在哪。KV cache 的体积由架构参数和序列长度决定，对单 token 有</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mtext>KVMem</mtext><mtext>token</mtext></msub><mo>=</mo><mn>2</mn><mo>⋅</mo><msub><mi>n</mi><mtext>layer</mtext></msub><mo>⋅</mo><msub><mi>n</mi><mtext>kv_head</mtext></msub><mo>⋅</mo><msub><mi>d</mi><mtext>head</mtext></msub><mo>⋅</mo><msub><mi>b</mi><mtext>kv</mtext></msub></mrow><annotation encoding="application/x-tex">\text{KVMem}_{\text{token}} = 2 \cdot n_{\text{layer}} \cdot n_{\text{kv\_head}} \cdot d_{\text{head}} \cdot b_{\text{kv}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord text"><span class="mord">KVMem</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">token</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">2</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.7306em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">n</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">layer</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8115em;vertical-align:-0.367em;"></span><span class="mord"><span class="mord mathnormal">n</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">kv_head</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.367em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">head</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">kv</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>OPT 13B 用传统 MHA，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>n</mi><mtext>kv_head</mtext></msub><mo>=</mo><mn>40</mn></mrow><annotation encoding="application/x-tex">n_{\text{kv\_head}} = 40</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7976em;vertical-align:-0.367em;"></span><span class="mord"><span class="mord mathnormal">n</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">kv_head</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.367em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">40</span></span></span></span></eq>，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>d</mi><mtext>head</mtext></msub><mo>=</mo><mn>128</mn></mrow><annotation encoding="application/x-tex">d_{\text{head}} = 128</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">head</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">128</span></span></span></span></eq>，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>n</mi><mtext>layer</mtext></msub><mo>=</mo><mn>40</mn></mrow><annotation encoding="application/x-tex">n_{\text{layer}} = 40</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">n</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">layer</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">40</span></span></span></span></eq>，FP16 时 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>b</mi><mtext>kv</mtext></msub><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">b_{\text{kv}} = 2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">kv</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">2</span></span></span></span></eq>，单 token 约 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>800</mn><mtext>KB</mtext></mrow><annotation encoding="application/x-tex">800\text{KB}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord">800</span><span class="mord text"><span class="mord">KB</span></span></span></span></span></eq>，与原文一致。模型允许的最大序列长度 2048，按最大值连续预留就是 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>1.6</mn><mtext>GB</mtext></mrow><annotation encoding="application/x-tex">1.6\text{GB}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord">1.6</span><span class="mord text"><span class="mord">GB</span></span></span></span></span></eq>。</p>
+<p>旧框架约束 KV cache 必须连续存放，是因为底层 Tensor 库要求 Tensor 在物理内存里连续。这个约束继承了传统深度学习负载的特征——固定 shape、生命周期与单次前向一致。KV cache 不一样：它的长度随 decode 增长、输出长度事先未知、生命周期跨越多次前向。把 KV cache 塞进&quot;为定长张量设计&quot;的连续容器里，必然要用预留最大长度的方式兜底。</p>
+<p>预留带来的浪费有两个来源。<strong>内部碎片</strong>：实际长度小于最大值，预留位全程空着，上面 200 token 实际占用 160 MB，剩下 1.44 GB 是纯闲空，占比 90%。<strong>外部碎片</strong>：buddy allocator 反复分配/释放不同大小的连续块，把整块内存切出大量空隙，论文实测的系统级浪费是 60–80%——内部碎片和外部碎片综合后的真实数字。</p>
+<p>这两个碎片是 KV cache 的特性与连续 Tensor 约束错配的直接结果，不是配置粗心或框架差。换更大显存、换更新 framework 都救不回来——只要还按最大长度连续预留，浪费就跟着最大长度线性增长。</p>
+<p><img src="/assets/pagedattn-radixattn/memory-allocation-comparison.png" alt="连续预留与分块按需的内存布局对比"></p>
+<h2 id="二、非连续分块与块表">二、非连续分块与块表</h2>
+<p>PagedAttention 把 KV cache 从&quot;一个请求一段连续显存&quot;改成&quot;按固定大小切块、每块可在物理显存任意位置&quot;。借的是 OS 虚拟内存的页式思想，但迁移到 GPU 上要做两件事：让 attention kernel 能跳着读 KV，以及把&quot;逻辑块到物理块&quot;的映射记下来。</p>
+<p>把 KV cache 按 block size <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B=16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq> token 切分。请求视角下 KV cache 是一串逻辑块 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>0</mn><mo separator="true">,</mo><mn>1</mn><mo separator="true">,</mo><mn>2</mn><mo separator="true">,</mo><mo>…</mo></mrow><annotation encoding="application/x-tex">0, 1, 2, \ldots</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8389em;vertical-align:-0.1944em;"></span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">1</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">2</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner">…</span></span></span></span></eq>，从左到右填满；物理视角下这些块的物理编号可以是 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>7</mn><mo separator="true">,</mo><mn>1</mn><mo separator="true">,</mo><mn>5</mn><mo separator="true">,</mo><mo>…</mo></mrow><annotation encoding="application/x-tex">7, 1, 5, \ldots</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8389em;vertical-align:-0.1944em;"></span><span class="mord">7</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">1</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">5</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner">…</span></span></span></span></eq>，彼此不连续。每个请求维护一张 <strong>block table</strong>，记录 logical block <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>j</mi></mrow><annotation encoding="application/x-tex">j</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.854em;vertical-align:-0.1944em;"></span><span class="mord mathnormal" style="margin-right:0.0572em;">j</span></span></span></span></eq> 对应的 physical block <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mtext>table</mtext><mo stretchy="false">[</mo><mi>j</mi><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">\text{table}[j]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">table</span></span><span class="mopen">[</span><span class="mord mathnormal" style="margin-right:0.0572em;">j</span><span class="mclose">]</span></span></span></span></eq>。当前位置 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi></mrow><annotation encoding="application/x-tex">i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6595em;"></span><span class="mord mathnormal">i</span></span></span></span></eq> 的 key/value 落在物理块 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mtext>table</mtext><mo stretchy="false">[</mo><mo stretchy="false">⌊</mo><mi>i</mi><mi mathvariant="normal">/</mi><mi>B</mi><mo stretchy="false">⌋</mo><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">\text{table}[\lfloor i/B \rfloor]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">table</span></span><span class="mopen">[⌊</span><span class="mord mathnormal">i</span><span class="mord">/</span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mclose">⌋]</span></span></span></span></eq> 的偏移 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi><mtext> </mtext><mo lspace="0.22em" rspace="0.22em"><mrow><mi mathvariant="normal">m</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">d</mi></mrow></mo><mtext> </mtext><mi>B</mi></mrow><annotation encoding="application/x-tex">i \bmod B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">i</span><span class="mspace" style="margin-right:0.0556em;"></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin"><span class="mord"><span class="mord mathrm">mod</span></span></span><span class="mspace" style="margin-right:0.0556em;"></span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 上。Attention 计算被改写成逐块形式：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>A</mi><mrow><mi>i</mi><mo separator="true">,</mo><mi>j</mi></mrow></msub><mo>=</mo><mfrac><mrow><mi>exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><msubsup><mi>q</mi><mi>i</mi><mi mathvariant="normal">⊤</mi></msubsup><msub><mi>K</mi><mi>j</mi></msub><mi mathvariant="normal">/</mi><msqrt><mi>d</mi></msqrt><mo stretchy="false">)</mo></mrow><mrow><munderover><mo>∑</mo><mrow><mi>r</mi><mo>=</mo><mn>1</mn></mrow><mrow><mo stretchy="false">⌈</mo><mi>i</mi><mi mathvariant="normal">/</mi><mi>B</mi><mo stretchy="false">⌉</mo></mrow></munderover><mi>exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><msubsup><mi>q</mi><mi>i</mi><mi mathvariant="normal">⊤</mi></msubsup><msub><mi>K</mi><mi>r</mi></msub><mi mathvariant="normal">/</mi><msqrt><mi>d</mi></msqrt><mo stretchy="false">)</mo></mrow></mfrac><mo separator="true">,</mo><mspace width="1em"/><msub><mi>o</mi><mi>i</mi></msub><mo>=</mo><munderover><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>1</mn></mrow><mrow><mo stretchy="false">⌈</mo><mi>i</mi><mi mathvariant="normal">/</mi><mi>B</mi><mo stretchy="false">⌉</mo></mrow></munderover><msub><mi>V</mi><mi>j</mi></msub><msubsup><mi>A</mi><mrow><mi>i</mi><mo separator="true">,</mo><mi>j</mi></mrow><mi mathvariant="normal">⊤</mi></msubsup></mrow><annotation encoding="application/x-tex">A_{i,j} = \frac{\exp(q_i^\top K_j / \sqrt{d})}{\sum_{r=1}^{\lceil i/B \rceil} \exp(q_i^\top K_r / \sqrt{d})},\quad o_i = \sum_{j=1}^{\lceil i/B \rceil} V_j A_{i,j}^\top</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mpunct mtight">,</span><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.8268em;vertical-align:-1.2176em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.6092em;"><span style="top:-2.11em;"><span class="pstrut" style="height:3.0279em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.0279em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0278em;">r</span><span class="mrel mtight">=</span><span class="mord mtight">1</span></span></span></span><span style="top:-3.2029em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">⌈</span><span class="mord mathnormal mtight">i</span><span class="mord mtight">/</span><span class="mord mathnormal mtight" style="margin-right:0.0502em;">B</span><span class="mclose mtight">⌉</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop">exp</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0359em;">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8309em;"><span style="top:-2.4231em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span><span style="top:-3.0448em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">⊤</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2769em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0715em;">K</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0278em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">/</span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9322em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span></span></span><span style="top:-2.8922em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1078em;"><span></span></span></span></span></span><span class="mclose">)</span></span></span><span style="top:-3.2579em;"><span class="pstrut" style="height:3.0279em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.7049em;"><span class="pstrut" style="height:3.0279em;"></span><span class="mord"><span class="mop">exp</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0359em;">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8491em;"><span style="top:-2.4413em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">⊤</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2587em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0715em;">K</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mord">/</span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9322em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span></span></span><span style="top:-2.8922em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1078em;"><span></span></span></span></span></span><span class="mclose">)</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.2176em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:1em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">o</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:3.3748em;vertical-align:-1.4138em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.961em;"><span style="top:-1.8723em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span><span class="mrel mtight">=</span><span class="mord mtight">1</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span><span style="top:-4.386em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">⌈</span><span class="mord mathnormal mtight">i</span><span class="mord mtight">/</span><span class="mord mathnormal mtight" style="margin-right:0.0502em;">B</span><span class="mclose mtight">⌉</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.4138em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.2222em;">V</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.2222em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8991em;"><span style="top:-2.453em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mpunct mtight">,</span><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">⊤</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3831em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p><eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>K</mi><mi>j</mi></msub><mo separator="true">,</mo><msub><mi>V</mi><mi>j</mi></msub></mrow><annotation encoding="application/x-tex">K_j, V_j</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0715em;">K</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.2222em;">V</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.2222em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></eq> 是 logical block <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>j</mi></mrow><annotation encoding="application/x-tex">j</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.854em;vertical-align:-0.1944em;"></span><span class="mord mathnormal" style="margin-right:0.0572em;">j</span></span></span></span></eq> 里 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 个位置的 K/V 拼接。Kernel 按 block table 逐块 gather，跑出来的算术结果和连续存储完全一致，代价只是多一次间接寻址。对 GPU 这种 gather 负载友好的硬件来说，间接地址的 overhead 被 tensor core 的浮点吞吐稀释到不可见。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph LR
+    A[&quot;prompt 7 token&quot;] --&gt; B[&quot;logical 0&lt;br&#x2F;&gt;4 token&quot;]
+    A --&gt; C[&quot;logical 1&lt;br&#x2F;&gt;3 token&quot;]
+    B --&gt; D[&quot;block table&lt;br&#x2F;&gt;(7, 1)&quot;]
+    C --&gt; D
+    D --&gt; E[&quot;physical 7&quot;]
+    D --&gt; F[&quot;physical 1&quot;]
+    E --&gt; G[&quot;GPU KV 池&lt;br&#x2F;&gt;非连续分布&quot;]
+    F --&gt; G
+
+    style A fill:#fff8e1,stroke:#ff9800,color:#333
+    style D fill:#fce4ec,stroke:#ef5350,color:#333
+    style E fill:#f0f4ff,stroke:#5b8def,color:#333
+    style F fill:#f0f4ff,stroke:#5b8def,color:#333
+    style G fill:#e8f5e9,stroke:#4caf50,color:#333
+  </pre></div>
+<p>具体的运转可以用论文里的 7-token prompt 走一遍：prefill 结束后 logical 0、1 分别映射到 physical 7、1，logical 1 还剩一个空位；第一步 decode 把新 KV 写进 logical 1 的空位，block table 不变；第二步 decode 时 logical 1 满了，调度器从 free list 摘一块 physical 5 接在 logical 2 后面，block table 增加一条记录。请求整段生命周期的浪费被限制在最后一块的未填满部分——平均不到 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mi mathvariant="normal">/</mi><mn>2</mn></mrow><annotation encoding="application/x-tex">B/2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mord">/2</span></span></span></span></eq> token 的 KV 体量，相对整个序列长度可忽略。</p>
+<p>块表这层间接一旦建起来，<strong>内存共享</strong>几乎免费。并行采样两个序列共享同一段 prompt，两条逻辑块链指向同一批物理块，给物理块加一个引用计数即可。当某条采样要写新 token 进共享块，引用计数 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>&gt;</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">&gt;1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5782em;vertical-align:-0.0391em;"></span><span class="mrel">&gt;</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">1</span></span></span></span></eq> 触发 copy-on-write：新分配一块物理块，把旧块内容拷过去，让该采样的 block table 指向新块并减旧块引用计数。Beam search、共享前缀、few-shot 共用示例 prompt，都通过 <code>fork / append / free</code> 三个原语组合表达：</p>
+<ul>
+<li><code>fork(src_seq)</code> 从已有序列派生新序列，逻辑块链直接复用 src 的物理块，引用计数加一。</li>
+<li><code>append(seq, token)</code> 把新 token 的 KV 追加到 seq 最后一个逻辑块；满则新分配物理块并更新 block table。</li>
+<li><code>free(seq)</code> 递减 seq 所有物理块的引用计数，归零的块还回 free list。</li>
+</ul>
+<p><eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 的取值是工程取舍。<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 太小，kernel 在单次 attention 内能并行 gather 的位置太少，tensor core 利用率下降；<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 太大，单块内部碎片升高，且不同请求共享前缀时命中粒度变粗（共享要按 B 对齐）。论文在 ShareGPT trace 上实测 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B = 16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq> 到 128 之间性能最好，默认 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B = 16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq>。这个甜蜜点是负载相关的——短输出场景 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B = 16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq> 够用，长前缀共享密集的负载偏大 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 更划算。</p>
+<p>碎片问题解决了。但块表本身只回答了&quot;KV 怎么存才不浪费&quot;，没有回答&quot;哪些块可以跨请求复用&quot;——这是后面两节的事。</p>
+<h2 id="三、块级哈希的前缀复用">三、块级哈希的前缀复用</h2>
+<p>多个请求带同一段 system prompt 是生产里最常见的复用场景：500 token 的 system prompt 算完 KV 要花一次 prefill，后续请求如果能直接用旧 KV，等于跳过这几百 token 的计算。vLLM 的 Automatic Prefix Caching（APC）把这个识别做成全局哈希表。</p>
+<p>每个物理块用 <strong>它自己的 token + 它前面所有 prefix token</strong> 一起做哈希，得到一个唯一 key：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>h</mi><mi>j</mi></msub><mo>=</mo><mtext>hash</mtext><mo stretchy="false">(</mo><mtext>prefix_tokens</mtext><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mtext> </mtext><mi mathvariant="normal">∥</mi><mtext> </mtext><mtext>block_tokens</mtext><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">h_j = \text{hash}(\text{prefix\_tokens}(j) \,\|\, \text{block\_tokens}(j))</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9805em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.06em;vertical-align:-0.31em;"></span><span class="mord text"><span class="mord">hash</span></span><span class="mopen">(</span><span class="mord text"><span class="mord">prefix_tokens</span></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.0572em;">j</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">∥</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord text"><span class="mord">block_tokens</span></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.0572em;">j</span><span class="mclose">))</span></span></span></span></span></eqn></section><p>全局维护一张 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>h</mi><mi>j</mi></msub><mo>→</mo><mtext>physical block</mtext></mrow><annotation encoding="application/x-tex">h_j \to \text{physical block}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9805em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mord text"><span class="mord">physical block</span></span></span></span></span></eq> 的表。新请求进调度时按 B 切块逐块算哈希、查表，命中即把这个 logical block 指向已有物理块、引用计数加一，跳过该块的 prefill；未命中的部分照常计算并写入新物理块、把哈希登记进表。命中粒度精确到满块，最后一个未满块不缓存。</p>
+<p>驱逐策略是 LRU。引用计数为 0 的块进入淘汰候选；多个候选同时被选时，优先淘汰&quot;前缀最长末端&quot;的块——长前缀的整体命中率比短前缀重要，因为复用收益线性于 prefix 长度。v0.11 起默认 SHA256 替换旧哈希，解决多租户下的碰撞风险；可选 xxhash 提速但要承担理论碰撞代价。</p>
+<p>块级哈希的核心取舍是<strong>精确匹配</strong>：只有&quot;前缀 token 序列完全相同&quot;才会命中。这对固定 system prompt + 短 query 的批推理足够——system prompt 部分的哈希在所有请求里完全一致，命中率接近 100%。但它对&quot;对话分支&quot;不擅长：第二轮 chat 历史是 [system, user1, assistant1, user2]，第三轮是 [system, user1, assistant1’, user2’]——一旦某轮选了不同分支，后续所有块的 prefix 都变了，哈希全部不命中，得从头算 KV。Few-shot 变体、self-consistency 多采样、tree-of-thought 分叉搜索都落在这类场景里。</p>
+<p>扁平哈希能高效表达&quot;完全相同的前缀链&quot;，但无法把&quot;共享部分前缀后再分叉&quot;的复用做系统化。树形结构就是为这个来的。</p>
+<h2 id="四、树形索引的自动复用">四、树形索引的自动复用</h2>
+<p>SGLang 的 RadixAttention 把 KV cache 复用判断从&quot;全局哈希表&quot;改成&quot;基数树&quot;。基数树是压缩前缀树：每个节点存一段 token 序列（而非单 token），子节点的序列拼上父节点的序列构成更长的前缀；节点 value 是这段 token 序列对应的 KV 页索引。整棵树存在 CPU 上，维护开销小到消融实验里看不出对吞吐的影响——即便没有一次缓存命中，RadixAttention 默认仍然常开，不像 vLLM APC 需要显式 <code>--enable-prefix-caching</code>。</p>
+<p>匹配过程是一次树查找。把新请求的 token 序列从 root 走下来，匹配到最长公共前缀的节点为止；命中段对应的 KV 已经在树上，直接复用；未命中的剩余部分才做 prefill，并把结果作为子节点插入到命中点下方。缓存粒度是 token 级——论文实现里每页 1 token，命中率与块对齐解耦。500-token 共享 system prompt 段里有 200 token 算过、300 token 没算的情况，树查找能精确命中到第 200 token 的位置，剩下 300 token 才算；块级哈希做不到这个，必须前 12 个满块（512 token）都完全相同才命中。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph TD
+    R[&quot;root&quot;] --&gt; S[&quot;System: You are helpful&quot;]
+    S --&gt; U[&quot;User: What&#39;s&quot;]
+    U --&gt; L1[&quot;AI - KV leaf&quot;]
+    U --&gt; L2[&quot;ML - KV leaf&quot;]
+    U --&gt; L3[&quot;DL - KV leaf&quot;]
+
+    style R fill:#fff8e1,stroke:#ff9800,color:#333
+    style S fill:#f0f4ff,stroke:#5b8def,color:#333
+    style U fill:#f0f4ff,stroke:#5b8def,color:#333
+    style L1 fill:#e8f5e9,stroke:#4caf50,color:#333
+    style L2 fill:#e8f5e9,stroke:#4caf50,color:#333
+    style L3 fill:#e8f5e9,stroke:#4caf50,color:#333
+  </pre></div>
+<p>并行采样、beam search、对话分支这些&quot;派生新分支&quot;的场景，在树上是天然操作：在某节点下挂多个子节点就是 fork，每个子节点独立延伸自己的 KV，共享的父链不动。不在树上做 fork，就得手动拷贝整段 prompt KV——vLLM 的 COW 块在块内做到这点，但需要应用层显式调用 <code>fork</code>；RadixAttention 的 fork 就是树结构本身的插入操作，应用层只要发起一次新的 generate 调用就自动完成。</p>
+<p>驱逐同样走 LRU，但作用在叶节点上，且递归——一个非叶节点的所有子节点都被驱逐后，它自己变成叶节点进入下一轮候选。这种结构化驱逐保留了高复用价值的内部节点（system prompt 这种多处共享的前缀），把淘汰压力扔给分叉末端。</p>
+<p>树形查找是 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><mtext>prefix length</mtext><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(\text{prefix length})</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0278em;">O</span><span class="mopen">(</span><span class="mord text"><span class="mord">prefix length</span></span><span class="mclose">)</span></span></span></span></eq>，扁平哈希是 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(1)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0278em;">O</span><span class="mopen">(</span><span class="mord">1</span><span class="mclose">)</span></span></span></span></eq>。看似树形慢，但查找开销被后面要做的 prefill 计算量稀释到不可测量——prefill 一段 token 是数百毫秒级，走树是微秒级。实际收益来自命中率：那些&quot;扁平哈希不命中、树形命中&quot;的场景，节省的是完整的 prefill 计算，不是几次 hash 查询。</p>
+<h2 id="五、复用层的结构差异">五、复用层的结构差异</h2>
+<p>把两个系统并列对比，会发现它们其实并不正面竞争。PagedAttention 的贡献落在内存层——让 KV cache 不再被连续 Tensor 约束绑死，按块非连续存放，消除内部和外部碎片。APC 是它之上的一个策略，用扁平哈希做精确前缀识别，能否开启由用户决定。RadixAttention 假设块状 KV cache 已经存在（SGLang 本身的 KV 管理走 paged layout），贡献落在复用层——用基数树做最长公共前缀匹配，把跨请求复用做成运行时默认。</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>vLLM PagedAttention + APC</th>
+<th>SGLang RadixAttention</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>内存层</td>
+<td>KV 按 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B=16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq> token 分块、非连续物理、块表间接</td>
+<td>paged layout、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">B=1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">1</span></span></span></span></eq> token/page</td>
+</tr>
+<tr>
+<td>复用索引</td>
+<td>全局哈希表 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>h</mi><mi>j</mi></msub><mo>→</mo><mtext>block</mtext></mrow><annotation encoding="application/x-tex">h_j \to \text{block}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9805em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.0572em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord text"><span class="mord">block</span></span></span></span></span></eq></td>
+<td>基数树，token 级最长公共前缀</td>
+</tr>
+<tr>
+<td>命中粒度</td>
+<td>整块（<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B=16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq>）才命中</td>
+<td>token 级，命中到任意 prefix 末端</td>
+</tr>
+<tr>
+<td>分支对话</td>
+<td>不同分支后所有 prefix hash 失配</td>
+<td>树上 fork 自然表达</td>
+</tr>
+<tr>
+<td>驱逐策略</td>
+<td>LRU + 前缀末端优先</td>
+<td>递归 LRU 叶节点</td>
+</tr>
+<tr>
+<td>开启方式</td>
+<td>默认关，<code>--enable-prefix-caching</code> 开</td>
+<td>默认开，消融显示无开销</td>
+</tr>
+</tbody>
+</table>
+<p>两者的工程取舍也对应这个分层。vLLM 选 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">B=16</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">16</span></span></span></span></eq> 是为了 kernel 并行度——块越大，单次 attention gather 能 tensor core 对齐的位置越多。SGLang 选 1 token/page 是为了让命中粒度与块对齐脱钩——token 级匹配能让 partial prefix 也能命中，代价是块单位变小、单次 kernel gather 的位置少。这个取舍就是把&quot;内存层效率&quot;和&quot;复用层精度&quot;分到不同参数上：<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq> 大对内存层好、对复用层不利；<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">B=1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">1</span></span></span></span></eq> 反过来。</p>
+<p>到了选型，按负载特征衡量就好。固定 system prompt、模板化批推理、RAG 文档静态、query 短的负载，vLLM APC 足够，命中率高且开销低；多轮对话、agent 分支推理、few-shot 变体测试、tree-of-thought 这类 fork 密集型负载，RadixAttention 的命中率和分支表达都更好，TTFT 改善在 prefix 重叠 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>&gt;</mo><mn>60</mn><mi mathvariant="normal">%</mi></mrow><annotation encoding="application/x-tex">&gt;60\%</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5782em;vertical-align:-0.0391em;"></span><span class="mrel">&gt;</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8056em;vertical-align:-0.0556em;"></span><span class="mord">60%</span></span></span></span></eq> 时可达 20–40%。两个框架的页式 KV 管理层差异并不大，真正的分歧全在复用层——把判断交给负载特征而不是引擎品牌，是更省心的视角。</p>
+<p><img src="/assets/pagedattn-radixattn/reuse-structure-comparison.png" alt="扁平哈希精确匹配与树形结构最长公共前缀的复用对比"></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/08/04/pagedattn-radixattn/">https://wrygill.github.io/2026/08/04/pagedattn-radixattn/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86%E4%BC%98%E5%8C%96/">推理优化</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI-Infra</a><a class="post-meta__tags" href="/tags/vLLM/">vLLM</a><a class="post-meta__tags" href="/tags/SGLang/">SGLang</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_2.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1"> 一条 100K 上下文的请求，在 Llama-3-70B（bf16）上会产生约 33GB 的 KV Cache。Prefill 与 Decode 分离部署后，这些数据必须在首 Token 返回之前搬到另一台机器。按 400G InfiniBand 端口的理论带宽估算，全量传输需要约 0.66 秒，而 TTFT 的预算通常只有几百毫秒。 训练侧面对的是同一挑战的另一种形态。一次梯度 AllReduce 要求上千张 GPU 同步完成收发，任何一张卡的迟到都由全体承担。 两类负载调用的协议栈几乎不重叠，回答的却是同一个问题：数据还要被搬几次，每次要等多久。  NCCL、RDMA、InfiniBand、RoCE、NVLink、NIXL、gRPC——这些名词在 AI Infra 的文档里通常以速查表的形式并列出现。速查表能解释名词，应付不了选型。换一张网卡、换一种并行度、把 Prefill 拆出去，每一步都要判断通信栈的哪一层会受影响。 下面分层组织，从物理通路开始逐层向上。箭头代表调用关系：传输与互联是公共底座，训练与推理各自向下取用。      flowchart TB     A[...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">vLLM 推理计算图</div></div><div class="info-2"><div class="info-item-1"> 同一个 Transformer 模型，连续两轮 Decode 执行的层结构几乎完全一致。第一轮可能有 32 条序列参与计算，下一轮只剩 27 条，同时又有一段新 Prompt 等待 Prefill。模型权重没有改变，参与计算的 Token、KV Cache 位置和 Attention 元数据却全部发生了变化。 这正是 LLM 推理计算图面对的基本矛盾：模型结构相对稳定，在线负载持续变化。  直接调用 PyTorch 模型时，一次前向可以简化为输入 Tensor 经过若干算子后产生 Logits。推理框架面对的工作更多：它要持续接收请求、组织批次、分配 KV Cache、执行模型、采样 Token，再把未完成的序列送入下一轮调度。即使模型层没有变化，每轮前向的输入形状和运行时状态也可能不同。 计算图提供了一种处理这种矛盾的方式。框架先把模型前向表示成可分析的图，在其中识别稳定结构、改写算子并生成 Kernel；随后从 GPU 执行序列中选择适合捕获的部分，用 CUDA Graph 降低重复提交的成本。调度器仍然保留动态决策能力，并在每轮执行前准备新的输入与元数据。 理解 vLLM...</div></div></div></a><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-25</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1"> 同一个 70B 模型，Prefill 可以把几千个 token 的 Prompt 一次吃进 GPU，Decode 却只能一个 token 一个 token 往前走。 权重没有变化，慢的是生成方式本身：每推进 1 个 token，140GB 权重就要从显存里完整读一遍。 投机解码（Speculative Decoding，SD）先用廉价草稿多猜几步，再让大模型一次验证。MTP（Multi-Token Prediction）继续往前走，把多 token 预测写进训练目标，让草稿能力从外挂变成模型原生接口。  一、串行 Decode Decode 慢的根源不在算力，在访存。 每生成一个 token，模型要把全部权重从 HBM 读进计算单元。batch=1 时，一次 forward 的算术强度约为 2N2N2N FLOPs 对应 2N2N2N 字节访存，即 ∼1\sim 1∼1 FLOP/byte。H100 的 ridge point 在 ∼300\sim 300∼300 FLOP/byte 量级，decode 离它有近三百倍差距。计算单元大量空转，延迟下限由显存带宽直接决定：    ...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1"> 一个 Llama 2 7B 模型，FP16 权重 13GB。把它装进 A100 40GB，看上去绰绰有余。batch size 拉到 8，上下文设 4096，跑两步 OOM 了。13GB 的模型在 40GB 的卡上怎么会爆？ 原因是显存的主体不止权重。KV Cache 随请求数和上下文长度线性增长，注意力中间结果随序列长度平方膨胀，框架的 workspace、通信 buffer 还要再吃一块。三块加起来，部署前不算清楚，运维线上就要在 dashboard 里看 OOM 告警。 这篇文章回答一个具体问题：给定模型、上下文长度和并发请求数，一张卡到底会占多少显存。  一、权重的显存 最直觉的部分。模型的参数量 NNN 是一个固定数字，权重显存等于参数量乘以每个参数占的字节数： WeightMem=N×bytes/param\text{WeightMem} = N \times \text{bytes/param}WeightMem=N×bytes/paramLlama 2 7B 标称 7B，实际参数量约 6.7B（含 embedding 与每一层的 attention/FFN 矩阵...</div></div></div></a><a class="pagination-related" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1"> 一条 100K 上下文的请求，在 Llama-3-70B（bf16）上会产生约 33GB 的 KV Cache。Prefill 与 Decode 分离部署后，这些数据必须在首 Token 返回之前搬到另一台机器。按 400G InfiniBand 端口的理论带宽估算，全量传输需要约 0.66 秒，而 TTFT 的预算通常只有几百毫秒。 训练侧面对的是同一挑战的另一种形态。一次梯度 AllReduce 要求上千张 GPU 同步完成收发，任何一张卡的迟到都由全体承担。 两类负载调用的协议栈几乎不重叠，回答的却是同一个问题：数据还要被搬几次，每次要等多久。  NCCL、RDMA、InfiniBand、RoCE、NVLink、NIXL、gRPC——这些名词在 AI Infra 的文档里通常以速查表的形式并列出现。速查表能解释名词，应付不了选型。换一张网卡、换一种并行度、把 Prefill 拆出去，每一步都要判断通信栈的哪一层会受影响。 下面分层组织，从物理通路开始逐层向上。箭头代表调用关系：传输与互联是公共底座，训练与推理各自向下取用。      flowchart TB     A[...</div></div></div></a><a class="pagination-related" href="/2026/06/01/llm-data-pipeline/" title="从文本到向量：LLM 的数据管道"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-02</div><div class="info-item-2">从文本到向量：LLM 的数据管道</div></div><div class="info-2"><div class="info-item-1"> 你在终端里输入一段 prompt，几秒后模型返回了一段流畅的回答。 但在模型&quot;看到&quot;你的 prompt 之前，它已经花了数月时间阅读互联网上的万亿级文本。 这些文本——HTML、PDF、代码、论坛帖子——是如何变成模型能理解的数字的？  本文是系列第一篇，回答一个问题：如何把人类语言变成模型能吃的数字？ 链路分三步：清洗原始语料 → 将文本切分为 Token → 将 Token 映射为向量。每一步的输出是下一步的输入，每一步的设计决策都直接影响模型的最终能力。  一、语料工程：从互联网到训练数据集 原始数据长什么样 Common Crawl 每月抓取数十亿网页，原始数据是 HTML。随便取一条： 1234567&lt;html&gt;&lt;head&gt;&lt;title&gt;Buy cheap shoes!!!&lt;/title&gt;&lt;/head&gt;&lt;body&gt;  &lt;div class=&quot;ad&quot;&gt;CLICK HERE FOR DEALS&lt;/div&gt;  &lt;p&gt;The mi...</div></div></div></a><a class="pagination-related" href="/2026/06/14/llm-alignment/" title="LLM 的训练与对齐"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-15</div><div class="info-item-2">LLM 的训练与对齐</div></div><div class="info-2"><div class="info-item-1"> 你做了一个客服机器人。用户问：“我的订单什么时候到？” 预训练模型的回答是：“我的订单什么时候到？这是一个常见的问题。订单的到达时间取决于多个因素，包括发货地、目的地、物流公司…” 用户要的是一个具体的日期，不是一篇物流科普文章。  这是每个做 LLM 应用的人都会遇到的问题：预训练模型会写文章，但不会回答问题。 你可能觉得这是 prompt 的问题，试了各种 prompt engineering 技巧，发现效果有限。根本原因不在 prompt，而在模型本身——它没有学过&quot;什么是好的回答&quot;。 本篇讲的就是如何让模型从&quot;会写&quot;变成&quot;会答&quot;。  一、预训练模型为什么不会回答问题 预训练的目标是预测下一个 token。这个目标让模型学会了语言的统计规律，但没有教它什么是&quot;好的回答&quot;。 你问它&quot;我的订单什么时候到&quot;，它会续写&quot;我的订单什么时候到？这是一个常见的问题…&quot;——因为它在训练数据里见过最多的就是这种&quot;百科全书式&quot;的写法。 问题出在损失函数：...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">29</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">34</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%BF%9E%E7%BB%AD%E5%86%85%E5%AD%98%E7%9A%84%E7%A2%8E%E7%89%87%E4%BB%A3%E4%BB%B7"><span class="toc-number">1.</span> <span class="toc-text">一、连续内存的碎片代价</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E9%9D%9E%E8%BF%9E%E7%BB%AD%E5%88%86%E5%9D%97%E4%B8%8E%E5%9D%97%E8%A1%A8"><span class="toc-number">2.</span> <span class="toc-text">二、非连续分块与块表</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%9D%97%E7%BA%A7%E5%93%88%E5%B8%8C%E7%9A%84%E5%89%8D%E7%BC%80%E5%A4%8D%E7%94%A8"><span class="toc-number">3.</span> <span class="toc-text">三、块级哈希的前缀复用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%A0%91%E5%BD%A2%E7%B4%A2%E5%BC%95%E7%9A%84%E8%87%AA%E5%8A%A8%E5%A4%8D%E7%94%A8"><span class="toc-number">4.</span> <span class="toc-text">四、树形索引的自动复用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%A4%8D%E7%94%A8%E5%B1%82%E7%9A%84%E7%BB%93%E6%9E%84%E5%B7%AE%E5%BC%82"><span class="toc-number">5.</span> <span class="toc-text">五、复用层的结构差异</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="vLLM 推理计算图"/></a><div class="content"><a class="title" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图">vLLM 推理计算图</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

@@ -1,0 +1,628 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Regularization：从背题到泛化 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="最烦人的训练曲线不是 loss 爆炸。 loss 爆炸至少很诚实：学习率太大、梯度溢出、数据有脏样本，问题通常摆在明面上。更麻烦的是另一种情况：train loss 一路下降，val loss 却从某个 checkpoint 开始慢慢抬头。 训练日志还在告诉你模型变好了，验证集已经在提醒你：它学偏了。   一、泛化误差与过拟合信号 训练初期，两条曲线通常会一起下降。这个阶段很好判断：模型还在学通">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Regularization：从背题到泛化">
+<meta property="og:url" content="https://wrygill.github.io/2026/06/29/regularization/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="最烦人的训练曲线不是 loss 爆炸。 loss 爆炸至少很诚实：学习率太大、梯度溢出、数据有脏样本，问题通常摆在明面上。更麻烦的是另一种情况：train loss 一路下降，val loss 却从某个 checkpoint 开始慢慢抬头。 训练日志还在告诉你模型变好了，验证集已经在提醒你：它学偏了。   一、泛化误差与过拟合信号 训练初期，两条曲线通常会一起下降。这个阶段很好判断：模型还在学通">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_2.jpg">
+<meta property="article:published_time" content="2026-06-29T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-22T14:22:57.904Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="深度学习">
+<meta property="article:tag" content="训练">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="Regularization">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_2.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Regularization：从背题到泛化",
+  "url": "https://wrygill.github.io/2026/06/29/regularization/",
+  "image": "https://wrygill.github.io/img/miku_cover_2.jpg",
+  "datePublished": "2026-06-29T16:00:00.000Z",
+  "dateModified": "2026-08-22T14:22:57.904Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/06/29/regularization/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Regularization：从背题到泛化',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_2.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">Regularization：从背题到泛化</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">Regularization：从背题到泛化</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-06-29T16:00:00.000Z" title="发表于 2026-06-30 00:00:00">2026-06-30</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-22T14:22:57.904Z" title="更新于 2026-08-22 22:22:57">2026-08-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B/">大模型</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>最烦人的训练曲线不是 loss 爆炸。</p>
+<p>loss 爆炸至少很诚实：学习率太大、梯度溢出、数据有脏样本，问题通常摆在明面上。更麻烦的是另一种情况：train loss 一路下降，val loss 却从某个 checkpoint 开始慢慢抬头。</p>
+<p>训练日志还在告诉你模型变好了，验证集已经在提醒你：它学偏了。</p>
+</blockquote>
+<hr>
+<h2 id="一、泛化误差与过拟合信号">一、泛化误差与过拟合信号</h2>
+<p>训练初期，两条曲线通常会一起下降。这个阶段很好判断：模型还在学通用模式，词和词之间的搭配、图像里的边缘和纹理、分类任务里的主要判别特征，都会同时改善训练集和验证集。</p>
+<p>真正容易误判的是分叉之后。train loss 继续下降，val loss 反而上升。训练集还在给模型发奖励，验证集已经开始扣分。</p>
+<p>这类曲线有欺骗性。你看 optimizer，没有异常；看梯度，没有爆；看训练 loss，还在变好。问题不在模型不学习，问题在它开始学习那些只对训练集有用的东西。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">step 1000: train loss = 2.41, val loss = 2.50</span><br><span class="line">step 2000: train loss = 1.92, val loss = 2.05</span><br><span class="line">step 3000: train loss = 1.61, val loss = 2.08</span><br><span class="line">step 4000: train loss = 1.38, val loss = 2.21</span><br></pre></td></tr></table></figure>
+<p><img src="/assets/regularization/loss-divergence.svg" alt="train loss 与 val loss 的分叉"></p>
+<p>这组日志里，3000 step 之后已经变味了。train loss 从 1.61 降到 1.38，val loss 却从 2.08 升到 2.21。多训练的 1000 step 没有带来更好的泛化，只是在训练集上刷分。</p>
+<p>用误差分解看，这个落差就是 generalization gap：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>generalization gap</mtext><mo>=</mo><msub><mi mathvariant="script">L</mi><mtext>val</mtext></msub><mo>−</mo><msub><mi mathvariant="script">L</mi><mtext>train</mtext></msub></mrow><annotation encoding="application/x-tex">\text{generalization gap} = \mathcal{L}_{\text{val}} - \mathcal{L}_{\text{train}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mord text"><span class="mord">generalization gap</span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathcal">L</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">val</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathcal">L</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3175em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">train</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>gap 不是一个抽象指标。它对应的是模型在训练集里多学出来、但验证集不认的那部分能力：噪声、重复样本、偶然相关性。</p>
+<p>正则化处理的就是这部分多余能力。它不负责让优化器走得更快，也不保证 train loss 更低。它更像一个刹车：模型想在训练集上继续钻细节时，把自由度往回拉一点。</p>
+<p>第一处最容易失控的位置，是参数本身。</p>
+<hr>
+<h2 id="二、参数范数约束">二、参数范数约束</h2>
+<p>先看参数。</p>
+<p>过拟合开始时，模型不一定会出现明显异常。更常见的情况是某些权重悄悄长大：训练集里一个局部模式碰巧有效，模型就不断放大它。只要这个模式能让 train loss 再低一点，优化器就会继续奖励它。</p>
+<p>麻烦在验证集上出现。权重越大，模型对输入扰动越敏感；一个本来很弱的特征，可能被放大成决策依据。训练集里它是捷径，验证集里它就是噪声。</p>
+<p>L2 正则的做法很粗暴：既然你想把权重推大，那我就在 loss 里给大权重加一笔成本。</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msup><mi mathvariant="script">L</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mo>=</mo><mi mathvariant="script">L</mi><mo>+</mo><mi>λ</mi><mi mathvariant="normal">∥</mi><mi>θ</mi><msubsup><mi mathvariant="normal">∥</mi><mn>2</mn><mn>2</mn></msubsup></mrow><annotation encoding="application/x-tex">\mathcal{L}&#x27; = \mathcal{L} + \lambda \|\theta\|_2^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8019em;"></span><span class="mord"><span class="mord mathcal">L</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8019em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.7667em;vertical-align:-0.0833em;"></span><span class="mord mathcal">L</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.1141em;vertical-align:-0.25em;"></span><span class="mord mathnormal">λ</span><span class="mord">∥</span><span class="mord mathnormal" style="margin-right:0.0278em;">θ</span><span class="mord"><span class="mord">∥</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8641em;"><span style="top:-2.453em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>这项惩罚会随着参数变大而变大。参数越想长大，loss 里付出的代价越高。</p>
+<p>对 SGD 来说，L2 正则和 weight decay 是等价的。因为 L2 项对参数的梯度是 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mi>λ</mi><mi>θ</mi></mrow><annotation encoding="application/x-tex">2\lambda\theta</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord">2</span><span class="mord mathnormal">λ</span><span class="mord mathnormal" style="margin-right:0.0278em;">θ</span></span></span></span></eq>，更新时会多减掉一项和当前参数成正比的值：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>θ</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>θ</mi><mi>t</mi></msub><mo>−</mo><mi>η</mi><mi mathvariant="normal">∇</mi><mi mathvariant="script">L</mi><mo stretchy="false">(</mo><msub><mi>θ</mi><mi>t</mi></msub><mo stretchy="false">)</mo><mo>−</mo><mn>2</mn><mi>η</mi><mi>λ</mi><msub><mi>θ</mi><mi>t</mi></msub></mrow><annotation encoding="application/x-tex">\theta_{t+1} = \theta_t - \eta \nabla \mathcal{L}(\theta_t) - 2\eta\lambda\theta_t</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9028em;vertical-align:-0.2083em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0278em;">θ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">t</span><span class="mbin mtight">+</span><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2083em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0278em;">θ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0359em;">η</span><span class="mord">∇</span><span class="mord mathcal">L</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0278em;">θ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mord">2</span><span class="mord mathnormal" style="margin-right:0.0359em;">η</span><span class="mord mathnormal">λ</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0278em;">θ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>最后一项就在把参数往 0 拉。</p>
+<p>拿一个二维参数做个小例子。初始参数是 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">[</mo><mn>3</mn><mo separator="true">,</mo><mo>−</mo><mn>4</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">[3, -4]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">[</span><span class="mord">3</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">−</span><span class="mord">4</span><span class="mclose">]</span></span></span></span></eq>，范数是 5。每一步使用同样的梯度，比较加不加 weight decay 的差异：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> math</span><br><span class="line"></span><br><span class="line">w_no_decay = [<span class="number">3.0</span>, -<span class="number">4.0</span>]</span><br><span class="line">w_decay = [<span class="number">3.0</span>, -<span class="number">4.0</span>]</span><br><span class="line">lr = <span class="number">0.1</span></span><br><span class="line">weight_decay = <span class="number">0.1</span></span><br><span class="line">grad = [<span class="number">0.2</span>, -<span class="number">0.1</span>]</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> _ <span class="keyword">in</span> <span class="built_in">range</span>(<span class="number">5</span>):</span><br><span class="line">    w_no_decay = [w - lr * g <span class="keyword">for</span> w, g <span class="keyword">in</span> <span class="built_in">zip</span>(w_no_decay, grad)]</span><br><span class="line">    w_decay = [w * (<span class="number">1</span> - lr * weight_decay) - lr * g <span class="keyword">for</span> w, g <span class="keyword">in</span> <span class="built_in">zip</span>(w_decay, grad)]</span><br><span class="line"></span><br><span class="line">norm = <span class="keyword">lambda</span> v: math.sqrt(<span class="built_in">sum</span>(x * x <span class="keyword">for</span> x <span class="keyword">in</span> v))</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;no_decay_norm&quot;</span>, <span class="built_in">round</span>(norm(w_no_decay), <span class="number">4</span>))</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;decay_norm&quot;</span>, <span class="built_in">round</span>(norm(w_decay), <span class="number">4</span>))</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;no_decay_weight&quot;</span>, [<span class="built_in">round</span>(x, <span class="number">4</span>) <span class="keyword">for</span> x <span class="keyword">in</span> w_no_decay])</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;decay_weight&quot;</span>, [<span class="built_in">round</span>(x, <span class="number">4</span>) <span class="keyword">for</span> x <span class="keyword">in</span> w_decay])</span><br></pre></td></tr></table></figure>
+<p>输出：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">no_decay_norm 4.9003</span><br><span class="line">decay_norm 4.6572</span><br><span class="line">no_decay_weight [2.9, -3.95]</span><br><span class="line">decay_weight [2.755, -3.755]</span><br></pre></td></tr></table></figure>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph LR
+    A[&quot;当前参数 theta&quot;] --&gt; B[&quot;梯度更新&quot;]
+    B --&gt; C[&quot;theta 继续远离原点&quot;]
+
+    D[&quot;当前参数 theta&quot;] --&gt; E[&quot;weight decay 收缩&quot;]
+    E --&gt; F[&quot;梯度更新&quot;]
+    F --&gt; G[&quot;参数范数更小&quot;]
+
+    style A fill:#fff8e1,stroke:#ff9800,color:#333
+    style B fill:#f0f4ff,stroke:#5b8def,color:#333
+    style C fill:#fce4ec,stroke:#ef5350,color:#333
+    style D fill:#fff8e1,stroke:#ff9800,color:#333
+    style E fill:#fce4ec,stroke:#ef5350,color:#333
+    style F fill:#f0f4ff,stroke:#5b8def,color:#333
+    style G fill:#e8f5e9,stroke:#4caf50,color:#333
+  </pre></div>
+<p>两边都沿着梯度方向更新，但 weight decay 额外压低了参数范数。这个例子只有两个参数，范数差距已经从 4.9003 拉到 4.6572。真实模型里，参数有几十亿个，这种持续收缩会改变整个参数空间的偏好。</p>
+<p>在 Adam 这类自适应优化器里，L2 和 weight decay 不再等价。这个坑在 Optimizer 那篇里已经展开过：AdamW 的修正是把 weight decay 从自适应梯度缩放里拆出来，让它直接作用在参数上。放到正则化这条线里看，AdamW 解决的是同一个问题：不要让参数规模在训练集上无限扩张。</p>
+<p>但参数被拉住以后，模型还有别的路。它可以不把单个权重推得很大，而是让一组神经元形成固定配合。训练集里的套路，照样能被记下来。</p>
+<hr>
+<h2 id="三、特征共适应抑制">三、特征共适应抑制</h2>
+<p>神经网络里，一个特征很少单独工作。某一层的几个神经元可能形成稳定组合：A 激活时 B 也激活，B 激活后 C 给出最终判断。</p>
+<p>这类组合在训练集上很容易变成捷径。比如某个背景纹理、某种固定句式、某个位置上的 token pattern，总是和标签一起出现。模型不需要理解更稳的规律，只要沿着这条路径走，就能继续降低 train loss。</p>
+<p>Dropout 堵的是这条路。训练时，它会随机把一部分激活置 0，让模型不能每次都依赖同一组神经元。</p>
+<p>常见实现使用 inverted dropout：训练时保留下来的激活会除以 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>1</mn><mo>−</mo><mi>p</mi></mrow><annotation encoding="application/x-tex">1-p</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7278em;vertical-align:-0.0833em;"></span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.625em;vertical-align:-0.1944em;"></span><span class="mord mathnormal">p</span></span></span></span></eq>，这样期望值和原始输入保持一致。推理时不再随机失活，直接使用完整网络。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> random</span><br><span class="line"></span><br><span class="line">random.seed(<span class="number">42</span>)</span><br><span class="line">x = [<span class="number">1.0</span>] * <span class="number">10</span></span><br><span class="line">p = <span class="number">0.5</span></span><br><span class="line"></span><br><span class="line">y = [<span class="number">0.0</span> <span class="keyword">if</span> random.random() &lt; p <span class="keyword">else</span> value / (<span class="number">1</span> - p) <span class="keyword">for</span> value <span class="keyword">in</span> x]</span><br><span class="line"><span class="built_in">print</span>(y)</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;nonzero&quot;</span>, <span class="built_in">sum</span>(<span class="number">1</span> <span class="keyword">for</span> value <span class="keyword">in</span> y <span class="keyword">if</span> value != <span class="number">0.0</span>))</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;mean&quot;</span>, <span class="built_in">round</span>(<span class="built_in">sum</span>(y) / <span class="built_in">len</span>(y), <span class="number">4</span>))</span><br></pre></td></tr></table></figure>
+<p>输出：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">[2.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0]</span><br><span class="line">nonzero 4</span><br><span class="line">mean 0.8</span><br></pre></td></tr></table></figure>
+<p>这一次随机只保留了 4 个位置。样本太短，所以均值只有 0.8；维度变大、多次采样后，平均值会接近原来的 1.0。</p>
+<p><img src="/assets/regularization/dropout-path-disruption.svg" alt="Dropout 打断固定特征路径"></p>
+<p>重点不在少算了几个激活，而在路径被打乱了。某条路径这一步能用，下一步可能就被关掉。模型想继续靠固定组合刷训练集，就没那么顺手。</p>
+<p>Transformer 里，dropout 通常出现在 attention 权重之后、FFN 激活之后、residual 分支之后。它们压的都是同一类风险：某一组激活关系稳定得过头。</p>
+<p>但这件事有个反直觉的地方。很多现代大模型的 dropout 直接设成 0。LLaMA 这类模型的训练数据规模足够大，数据本身已经提供了大量变化。继续加 dropout，有时反而是在有效信号上叠噪声。</p>
+<p>这一步很关键：正则化不一定来自模型结构。数据本身如果足够丰富，也会不断打断模型的固定套路。反过来，数据本身太窄时，dropout 再怎么随机，也只是在同一个小世界里随机。</p>
+<hr>
+<h2 id="四、训练分布扩展">四、训练分布扩展</h2>
+<p>如果训练数据本身分布很窄，模型会更容易背题。这个问题比参数过大更隐蔽，因为模型没有做错任何事。它只是认真相信了训练集给它看的世界。</p>
+<p>图像分类里，如果猫总是出现在画面中央，模型可能学到“中央有一团毛茸茸纹理”就判成猫。训练集上这条规则很好用，测试时猫偏到角落，规则立刻失效。</p>
+<p>数据增强改变的是这个世界。随机裁剪、水平翻转、颜色扰动表面上制造了更多文件，真正传递给模型的是另一条信息：同一个语义对象可以出现在不同位置、不同亮度、不同局部背景里。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">原始样本：一只猫在画面中央</span><br><span class="line">增强样本：猫偏左、猫偏右、亮度更暗、背景裁掉一部分</span><br></pre></td></tr></table></figure>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph LR
+    A[&quot;原始样本&quot;] --&gt; B[&quot;随机裁剪&quot;]
+    A --&gt; C[&quot;位置偏移&quot;]
+    A --&gt; D[&quot;亮度变化&quot;]
+    A --&gt; E[&quot;背景扰动&quot;]
+
+    B --&gt; F[&quot;更宽的训练分布&quot;]
+    C --&gt; F
+    D --&gt; F
+    E --&gt; F
+
+    F --&gt; G[&quot;减少偶然模式依赖&quot;]
+
+    style A fill:#fff8e1,stroke:#ff9800,color:#333
+    style B fill:#f0f4ff,stroke:#5b8def,color:#333
+    style C fill:#f0f4ff,stroke:#5b8def,color:#333
+    style D fill:#f0f4ff,stroke:#5b8def,color:#333
+    style E fill:#f0f4ff,stroke:#5b8def,color:#333
+    style F fill:#f5f5f5,stroke:#9e9e9e,color:#333
+    style G fill:#e8f5e9,stroke:#4caf50,color:#333
+  </pre></div>
+<p>这些变化会压低模型对偶然模式的依赖。它不能只记住“中央纹理”，因为同一只猫被移动过、裁剪过、调色过。</p>
+<p>文本任务麻烦一些。图像左右翻转后，猫还是猫；一段文本替换几个词后，语义可能已经变了。尤其是指令数据和代码数据，随便改 token 很容易破坏约束。</p>
+<p>所以在 LLM 训练里，更常见的数据侧正则化通常不是硬造增强样本。去重、清洗和控制混合比例更常见。</p>
+<p>重复样本尤其危险。如果一段文本在训练集中出现很多次，模型会得到过多机会记住它。它学到的会逐渐偏离“这类句子该怎么写”，更接近“这段原文就是答案”。对语言模型来说，这不仅影响泛化，还可能带来记忆和泄露风险。</p>
+<p>去重做的是另一种限制：不让某些样本在训练分布里获得过高权重。清洗减少噪声样本对模型的牵引。混合比例控制更像是在调训练世界的地形：代码、数学、网页、书籍、对话数据各占多少，会直接影响模型最后偏向哪些能力。</p>
+<p>这部分和数据处理文章可以衔接起来看。数据 pipeline 不只是把原始语料变成 token，它也在决定模型会反复看见什么、忽略什么、记住什么。</p>
+<p>模型看到的数据分布被扩展后，还有一类问题会留在输出端：它可能答得没那么错，但答得太满。</p>
+<hr>
+<h2 id="五、输出分布校准">五、输出分布校准</h2>
+<p>分类模型还有一种坏习惯：答错时也很自信。</p>
+<p>这类模型在训练集上经常很好看。正确类别概率被推到 0.99，其他类别被压到接近 0，cross entropy 很低。但实际使用时，置信度本身也会参与决策：是否拒答、是否触发人工审核、是否把结果交给下游系统。</p>
+<p>one-hot 目标会放大这个倾向：正确类别是 1，其他类别全是 0。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">真实类别 = cat</span><br><span class="line">目标分布 = [dog: 0.0, cat: 1.0, car: 0.0]</span><br></pre></td></tr></table></figure>
+<p>这种目标很硬。模型会被鼓励把正确类别的概率推到尽可能接近 1，把其他类别压到接近 0。训练集上，loss 会很好看；验证集上，模型可能变得过度自信。</p>
+<p>Label Smoothing 把目标分布软化一点。假设有 3 个类别，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>ϵ</mi><mo>=</mo><mn>0.1</mn></mrow><annotation encoding="application/x-tex">\epsilon=0.1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">ϵ</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">0.1</span></span></span></span></eq>，原来的 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">[</mo><mn>1</mn><mo separator="true">,</mo><mn>0</mn><mo separator="true">,</mo><mn>0</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">[1, 0, 0]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">[</span><span class="mord">1</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">0</span><span class="mclose">]</span></span></span></span></eq> 会变成：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mo stretchy="false">[</mo><mn>0.9333</mn><mo separator="true">,</mo><mn>0.0333</mn><mo separator="true">,</mo><mn>0.0333</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">[0.9333, 0.0333, 0.0333]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">[</span><span class="mord">0.9333</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">0.0333</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">0.0333</span><span class="mclose">]</span></span></span></span></span></eqn></section><p>正确类别仍然最高，但不再是绝对的 1。其他类别也不再是绝对的 0。</p>
+<p>用一组 logits 看交叉熵变化：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> math</span><br><span class="line"></span><br><span class="line">logits = [<span class="number">4.0</span>, <span class="number">0.5</span>, -<span class="number">1.0</span>]</span><br><span class="line">max_logit = <span class="built_in">max</span>(logits)</span><br><span class="line">exp_values = [math.exp(v - max_logit) <span class="keyword">for</span> v <span class="keyword">in</span> logits]</span><br><span class="line">probs = [v / <span class="built_in">sum</span>(exp_values) <span class="keyword">for</span> v <span class="keyword">in</span> exp_values]</span><br><span class="line"></span><br><span class="line">hard_target = [<span class="number">1.0</span>, <span class="number">0.0</span>, <span class="number">0.0</span>]</span><br><span class="line">eps = <span class="number">0.1</span></span><br><span class="line">classes = <span class="number">3</span></span><br><span class="line">smooth_target = [eps / classes] * classes</span><br><span class="line">smooth_target[<span class="number">0</span>] += <span class="number">1</span> - eps</span><br><span class="line"></span><br><span class="line">cross_entropy = <span class="keyword">lambda</span> target: -<span class="built_in">sum</span>(t * math.log(p) <span class="keyword">for</span> t, p <span class="keyword">in</span> <span class="built_in">zip</span>(target, probs))</span><br><span class="line"></span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;probs&quot;</span>, [<span class="built_in">round</span>(v, <span class="number">4</span>) <span class="keyword">for</span> v <span class="keyword">in</span> probs])</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;hard_ce&quot;</span>, <span class="built_in">round</span>(cross_entropy(hard_target), <span class="number">4</span>))</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;smooth_ce&quot;</span>, <span class="built_in">round</span>(cross_entropy(smooth_target), <span class="number">4</span>))</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;smooth_target&quot;</span>, [<span class="built_in">round</span>(v, <span class="number">4</span>) <span class="keyword">for</span> v <span class="keyword">in</span> smooth_target])</span><br></pre></td></tr></table></figure>
+<p>输出：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">probs [0.9644, 0.0291, 0.0065]</span><br><span class="line">hard_ce 0.0363</span><br><span class="line">smooth_ce 0.3196</span><br><span class="line">smooth_target [0.9333, 0.0333, 0.0333]</span><br></pre></td></tr></table></figure>
+<p><img src="/assets/regularization/output-calibration.svg" alt="Label Smoothing 对输出分布的软化"></p>
+<p>这个输出已经很尖了。模型对第一个类别给出 96.44% 的概率，hard label 几乎不再惩罚它，loss 只有 0.0363。label smoothing 下，loss 变成 0.3196。它在提醒模型：答对就够了，没必要把分布压成一根针。</p>
+<p>这能改善一类实际问题：模型准确率不差，但置信度不可靠。它答错时也很自信，下游系统就很难用阈值控制风险。</p>
+<p>不过 label smoothing 也不是默认正确。某些生成任务需要模型精确拟合目标 token 分布，过强的 smoothing 会降低学习信号。尤其是数据本身已经有噪声时，继续软化标签可能把边界弄得更模糊。</p>
+<p>到这里，几类正则化手段对应的位置就清楚了：参数空间、激活路径、训练分布、输出分布。最后的问题变成工程判断：什么时候该用哪一个，用多强。</p>
+<hr>
+<h2 id="六、正则化强度选择">六、正则化强度选择</h2>
+<p>同样是 val loss 反弹，不能上来就把所有正则化开关都调大。那样很容易把问题从过拟合改成欠拟合。</p>
+<p>先看参数范数。如果训练中参数范数一路变大，weight decay 是第一优先级。它直接限制参数规模，通常也是最稳定的正则化手段。训练大模型时，AdamW 里的 weight decay 几乎是默认配置。</p>
+<p>再看激活路径。如果模型明显依赖固定特征组合，或者数据规模不大，dropout 可以削弱特征共适应。它对中小模型和数据量有限的任务更常见。到了大规模预训练，dropout 经常被关掉。原因并不复杂：数据规模已经承担了很大一部分正则化作用。</p>
+<p>然后回到数据。如果训练样本重复、来源单一、分布太窄，先处理数据。继续调 dropout 或 weight decay 只能缓解表面现象。重复样本给模型提供了背题机会，分布狭窄让模型误以为局部模式就是普遍规律。</p>
+<p>最后看输出。如果模型准确率还行，但置信度明显偏高，再考虑 label smoothing 或后处理校准。这个问题通常不只看 loss，还要看预测概率分布和 calibration 指标。</p>
+<p>还有一种情况最容易误伤：train loss 和 val loss 都高。这个时候优先加正则，往往会让问题更糟。模型本来还没学会，再加约束只会更难拟合。该先检查学习率、模型容量、数据质量和训练步数。</p>
+<p>正则化不是训练脚本里的几个开关。它更像一次排查：模型在哪里获得了过多自由，就从哪里把它拉回来。</p>
+<p>有时候该拉权重，有时候该断路径，有时候该清数据，有时候该软化输出。麻烦的是，拉多了也会出问题。模型还没学会时先把它绑住，最后只会得到欠拟合。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/06/29/regularization/">https://wrygill.github.io/2026/06/29/regularization/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0/">深度学习</a><a class="post-meta__tags" href="/tags/%E8%AE%AD%E7%BB%83/">训练</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/Regularization/">Regularization</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_2.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/07/agent-harness-llm-complex-tasks/" title="Agent Harness 如何驱动 LLM 解决复杂任务"><img class="cover" src="/img/miku_cover_3.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Agent Harness 如何驱动 LLM 解决复杂任务</div></div><div class="info-2"><div class="info-item-1"> 同一个 LLM，放在聊天框里和放在 Agent Harness 里，面对同一个任务表现可以差很远。 让一个普通聊天模型修测试失败。它会解释可能的原因——某个分支没判空、测试断言过期或者环境配置不一致。然后停下来等你决定下一步。 把它放进 Harness 里，同一模型会先跑测试，读错误堆栈，打开源文件，定位问题，修改代码，再跑一次验证。如果新错误出现，它继续处理。 两套输出来自同一个模型。决定表现的差异不在模型内部，在模型外那层软件框架里。  Sebastian Raschka 在他 2026 年 4 月的文章里给过一个直接的说法：“I suspect that if we dropped one of the latest, most capable open-weight LLMs, such as GLM-5, into a similar harness, it could likely perform on par with GPT-5.4 in Codex or Claude Opus 4.6 in Claude Code。” 这句话不是在夸模型迭代多快，是在说：Ag...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1"> 一个 Llama 2 7B 模型，FP16 权重 13GB。把它装进 A100 40GB，看上去绰绰有余。batch size 拉到 8，上下文设 4096，跑两步 OOM 了。13GB 的模型在 40GB 的卡上怎么会爆？ 原因是显存的主体不止权重。KV Cache 随请求数和上下文长度线性增长，注意力中间结果随序列长度平方膨胀，框架的 workspace、通信 buffer 还要再吃一块。三块加起来，部署前不算清楚，运维线上就要在 dashboard 里看 OOM 告警。 这篇文章回答一个具体问题：给定模型、上下文长度和并发请求数，一张卡到底会占多少显存。  一、权重的显存 最直觉的部分。模型的参数量 NNN 是一个固定数字，权重显存等于参数量乘以每个参数占的字节数： WeightMem=N×bytes/param\text{WeightMem} = N \times \text{bytes/param}WeightMem=N×bytes/paramLlama 2 7B 标称 7B，实际参数量约 6.7B（含 embedding 与每一层的 attention/FFN 矩阵...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/05/29/Optimizer-%E4%BB%8ESGD%E5%88%B0AdamW/" title="Optimizer：从 SGD 到 AdamW"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-05-29</div><div class="info-item-2">Optimizer：从 SGD 到 AdamW</div></div><div class="info-2"><div class="info-item-1">Optimizer：从 SGD 到 AdamW 训练神经网络就是在找一个最低点。你站在 loss 曲面的某个位置，每步沿着梯度方向往下走一点，希望最后走到谷底。 SGD 做的就是这件事： 1234for x, y in dataloader:    loss = model(x, y)      # 前向：算出当前位置的 loss    loss.backward()          # 反向：算出梯度 g_t    optimizer.step()         # 更新：θ = θ - lr * g_t 听起来简单。但真正跑起来，你会发现 loss 降着降着不动了——不是到了最低点，梯度还不是零，参数也还在更新，但 loss 就是不降。 问题出在哪？梯度告诉你的是&quot;当前脚下最陡的下坡方向&quot;。但如果这座山的形状是一个又窄又长的峡谷呢？最陡的方向指向峡谷的侧壁，而不是谷底。你每一步都往侧壁走，走到对面再弹回来——来来回回，沿谷底的有效位移极小。 这就是 SGD 的第一个问题：梯度方向和真正该去的方向之间有夹角。   一、Momentum：让方向靠谱一点 M...</div></div></div></a><a class="pagination-related" href="/2026/06/01/mixed-precision/" title="Mixed Precision：从 FP32 到 FP8"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-01</div><div class="info-item-2">Mixed Precision：从 FP32 到 FP8</div></div><div class="info-2"><div class="info-item-1">Mixed Precision：从 FP32 到 FP8  一台 A100 80GB，一个 7B 模型。参数 28GB，梯度 28GB，Adam 的 mtm_tmt​ 和 vtv_tvt​ 共 56GB——合计 112GB。一张卡放不下，还没开始训练显存就先不够了。  一、训练时的显存分布 先把 FP32 训练的显存拆开算一遍。 一个 7B 模型，参数量 N=7×109N = 7 \times 10^9N=7×109，每个参数占 4 字节（FP32），参数本身 4N≈28GB4N \approx 28\text{GB}4N≈28GB。梯度与参数同 shape，又是 28GB。 但真正的大头是优化器状态。Adam 维护两个 FP32 buffer： mt=β1⋅mt−1+(1−β1)⋅gt（一阶矩）m_t = \beta_1 \cdot m_{t-1} + (1 - \beta_1) \cdot g_t \qquad \text{（一阶矩）}mt​=β1​⋅mt−1​+(1−β1​)⋅gt​（一阶矩）vt=β2⋅vt−1+(1−β2)⋅gt2（二阶矩）v_t = \beta_2 \...</div></div></div></a><a class="pagination-related" href="/2026/07/07/agent-harness-llm-complex-tasks/" title="Agent Harness 如何驱动 LLM 解决复杂任务"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-08</div><div class="info-item-2">Agent Harness 如何驱动 LLM 解决复杂任务</div></div><div class="info-2"><div class="info-item-1"> 同一个 LLM，放在聊天框里和放在 Agent Harness 里，面对同一个任务表现可以差很远。 让一个普通聊天模型修测试失败。它会解释可能的原因——某个分支没判空、测试断言过期或者环境配置不一致。然后停下来等你决定下一步。 把它放进 Harness 里，同一模型会先跑测试，读错误堆栈，打开源文件，定位问题，修改代码，再跑一次验证。如果新错误出现，它继续处理。 两套输出来自同一个模型。决定表现的差异不在模型内部，在模型外那层软件框架里。  Sebastian Raschka 在他 2026 年 4 月的文章里给过一个直接的说法：“I suspect that if we dropped one of the latest, most capable open-weight LLMs, such as GLM-5, into a similar harness, it could likely perform on par with GPT-5.4 in Codex or Claude Opus 4.6 in Claude Code。” 这句话不是在夸模型迭代多快，是在说：Ag...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">29</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">34</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E6%B3%9B%E5%8C%96%E8%AF%AF%E5%B7%AE%E4%B8%8E%E8%BF%87%E6%8B%9F%E5%90%88%E4%BF%A1%E5%8F%B7"><span class="toc-number">1.</span> <span class="toc-text">一、泛化误差与过拟合信号</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%8F%82%E6%95%B0%E8%8C%83%E6%95%B0%E7%BA%A6%E6%9D%9F"><span class="toc-number">2.</span> <span class="toc-text">二、参数范数约束</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E7%89%B9%E5%BE%81%E5%85%B1%E9%80%82%E5%BA%94%E6%8A%91%E5%88%B6"><span class="toc-number">3.</span> <span class="toc-text">三、特征共适应抑制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E8%AE%AD%E7%BB%83%E5%88%86%E5%B8%83%E6%89%A9%E5%B1%95"><span class="toc-number">4.</span> <span class="toc-text">四、训练分布扩展</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E8%BE%93%E5%87%BA%E5%88%86%E5%B8%83%E6%A0%A1%E5%87%86"><span class="toc-number">5.</span> <span class="toc-text">五、输出分布校准</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%AD%A3%E5%88%99%E5%8C%96%E5%BC%BA%E5%BA%A6%E9%80%89%E6%8B%A9"><span class="toc-number">6.</span> <span class="toc-text">六、正则化强度选择</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="vLLM 推理计算图"/></a><div class="content"><a class="title" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图">vLLM 推理计算图</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

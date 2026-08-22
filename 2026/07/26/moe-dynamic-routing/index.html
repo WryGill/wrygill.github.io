@@ -1,0 +1,652 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>MoE 动态路由与稀疏计算 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="DeepSeek-V3 包含 671B 参数，每个 Token 实际激活 37B。单看前向计算，它更接近一个 37B 模型；单看权重存储，它仍然要为 671B 参数寻找位置。 少算的参数没有消失。它们以专家权重的形式分布在设备上，等待 Router 选择。被选中的专家若位于其他 GPU，Token 还要先离开当前设备，完成跨卡传输后才能进入 FFN。 MoE 解耦了模型容量与单 Token 计算">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MoE 动态路由与稀疏计算">
+<meta property="og:url" content="https://wrygill.github.io/2026/07/26/moe-dynamic-routing/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="DeepSeek-V3 包含 671B 参数，每个 Token 实际激活 37B。单看前向计算，它更接近一个 37B 模型；单看权重存储，它仍然要为 671B 参数寻找位置。 少算的参数没有消失。它们以专家权重的形式分布在设备上，等待 Router 选择。被选中的专家若位于其他 GPU，Token 还要先离开当前设备，完成跨卡传输后才能进入 FFN。 MoE 解耦了模型容量与单 Token 计算">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_3.jpg">
+<meta property="article:published_time" content="2026-07-26T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-22T14:22:57.904Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="AI-Infra">
+<meta property="article:tag" content="MoE">
+<meta property="article:tag" content="分布式推理">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_3.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "MoE 动态路由与稀疏计算",
+  "url": "https://wrygill.github.io/2026/07/26/moe-dynamic-routing/",
+  "image": "https://wrygill.github.io/img/miku_cover_3.jpg",
+  "datePublished": "2026-07-26T16:00:00.000Z",
+  "dateModified": "2026-08-22T14:22:57.904Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/07/26/moe-dynamic-routing/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'MoE 动态路由与稀疏计算',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_3.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">MoE 动态路由与稀疏计算</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">MoE 动态路由与稀疏计算</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-22T14:22:57.904Z" title="更新于 2026-08-22 22:22:57">2026-08-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infrastructure/">AI Infrastructure</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>DeepSeek-V3 包含 671B 参数，每个 Token 实际激活 37B。单看前向计算，它更接近一个 37B 模型；单看权重存储，它仍然要为 671B 参数寻找位置。</p>
+<p>少算的参数没有消失。它们以专家权重的形式分布在设备上，等待 Router 选择。被选中的专家若位于其他 GPU，Token 还要先离开当前设备，完成跨卡传输后才能进入 FFN。</p>
+<p>MoE 解耦了模型容量与单 Token 计算量，也把一部分矩阵计算问题转化成了路由、负载和通信问题。</p>
+</blockquote>
+<p>Dense Transformer 扩大模型时，参数量与前向计算量通常同步增长。MoE（Mixture of Experts）在 FFN 中引入条件计算，让模型保留大量专家参数，同时只为每个 Token 激活少数专家。按 DeepSeek-V3 公布的数据计算，单 Token 激活的参数约占总参数的 5.5%。</p>
+<p>这个比例说明了 MoE 如何控制前向计算，却无法单独解释显存占用、吞吐和延迟。要理解两类成本为何出现分歧，需要先看它对 Transformer Block 做了什么改动。</p>
+<h2 id="一、参数与计算解耦">一、参数与计算解耦</h2>
+<p>Transformer Block 的主要参数集中在 Attention 和 FFN。Dense 模型让每个 Token 经过同一组 FFN 权重，稀疏 MoE 则将这组 FFN 扩展成专家池，并在入口增加 Router。Router 根据当前 Token 的隐藏状态计算专家分数，从中选择 Top-K 专家参与前向。</p>
+<p>设输入为 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>x</mi></mrow><annotation encoding="application/x-tex">x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">x</span></span></span></span></eq>，专家数量为 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq>，Router 为每个专家产生分数 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>s</mi><mi>i</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">s_i(x)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span></span></span></span></eq>。选出集合 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">T(x)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">T</span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span></span></span></span></eq> 后，MoE 层可以写成：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>y</mi><mo>=</mo><munder><mo>∑</mo><mrow><mi>i</mi><mo>∈</mo><mi>T</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></munder><msub><mi>g</mi><mi>i</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><msub><mi>E</mi><mi>i</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo separator="true">,</mo><mspace width="2em"/><mi mathvariant="normal">∣</mi><mi>T</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mi mathvariant="normal">∣</mi><mo>=</mo><mi>K</mi></mrow><annotation encoding="application/x-tex">
+y = \sum_{i \in T(x)} g_i(x)E_i(x), \qquad |T(x)| = K
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.625em;vertical-align:-0.1944em;"></span><span class="mord mathnormal" style="margin-right:0.0359em;">y</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.566em;vertical-align:-1.516em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.05em;"><span style="top:-1.809em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mrel mtight">∈</span><span class="mord mathnormal mtight" style="margin-right:0.1389em;">T</span><span class="mopen mtight">(</span><span class="mord mathnormal mtight">x</span><span class="mclose mtight">)</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.516em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0359em;">g</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span><span class="mpunct">,</span><span class="mspace" style="margin-right:2em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">∣</span><span class="mord mathnormal" style="margin-right:0.1389em;">T</span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span><span class="mord">∣</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">K</span></span></span></span></span></eqn></section><p>式中各项对应 MoE 的三个基本组件：</p>
+<ul>
+<li><eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">E_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq>：第 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi></mrow><annotation encoding="application/x-tex">i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6595em;"></span><span class="mord mathnormal">i</span></span></span></span></eq> 个专家 FFN；</li>
+<li><eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>g</mi><mi>i</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">g_i(x)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0359em;">g</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span></span></span></span></eq>：被选中专家的组合权重；</li>
+<li><eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">T(x)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">T</span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span></span></span></span></eq>：Router 为输入 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>x</mi></mrow><annotation encoding="application/x-tex">x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">x</span></span></span></span></eq> 选择的 Top-K 专家集合。</li>
+</ul>
+<p>单 Token 的计算量主要由 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">K</span></span></span></span></eq> 和专家规模决定，总参数量则会随专家总数 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq> 增长。当 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">K</span></span></span></span></eq> 远小于 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq> 时，新增专家可以扩大参数空间，而无需进入每个 Token 的计算路径。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    X1[&quot;Token 隐藏状态&quot;] --&gt; D[&quot;Dense FFN&quot;]
+    D --&gt; Y1[&quot;输出&quot;]
+
+    X2[&quot;Token 隐藏状态&quot;] --&gt; R[&quot;Router&quot;]
+    R --&gt; E1[&quot;Expert 1&quot;]
+    R --&gt; E2[&quot;Expert 2&quot;]
+    R -. 未激活 .-&gt; EN[&quot;其他 Experts&quot;]
+    E1 --&gt; C[&quot;加权合并&quot;]
+    E2 --&gt; C
+    C --&gt; Y2[&quot;输出&quot;]
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef inactive fill:#f5f5f5,stroke:#9e9e9e,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class X1,X2 input;
+    class D,R,E1,E2,C process;
+    class EN inactive;
+    class Y1,Y2 output;
+  </pre></div>
+<p>Mixtral 8×7B 展示了这种解耦。它在每个 MoE 层设置 8 个专家，每个 Token 选择其中 2 个；模型总参数约 47B，单 Token 激活约 13B，激活比例约为 27.7%。名称中的“8×7B”不能直接换算成 56B，13B 也不等于模型的存储规模。Attention、Embedding 等参数由所有 Token 共享，专家池只替换 FFN 部分。</p>
+<p>至此，参数容量与单 Token 计算量已经分开。这个结构能否有效运行，取决于 Router 能否在大量专家之间持续给出既有学习价值、又能被系统高效执行的选择。</p>
+<h2 id="二、路由的双重目标">二、路由的双重目标</h2>
+<p>Router 通常是一个从隐藏维度投影到专家数量的线性层。它先为一批 Token 生成路由分数，Top-K 再据此决定每个 Token 进入哪些专家。选择完成后，系统把原本按序列排列的 Token 按专家重新分组，形成各自的输入批次；FFN 计算结束后，再将结果还原到原位置并加权合并。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    A[&quot;Token Batch&quot;] --&gt; B[&quot;Router Scores&quot;]
+    B --&gt; C[&quot;Top-K 选择&quot;]
+    C --&gt; D[&quot;Dispatch 重排&quot;]
+    D --&gt; E1[&quot;Expert 1 Batch&quot;]
+    D --&gt; E2[&quot;Expert 2 Batch&quot;]
+    D --&gt; E3[&quot;Expert N Batch&quot;]
+    E1 --&gt; F[&quot;Combine 还原&quot;]
+    E2 --&gt; F
+    E3 --&gt; F
+    F --&gt; G[&quot;MoE 输出&quot;]
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef data fill:#f5f5f5,stroke:#9e9e9e,color:#333;
+    classDef key fill:#fce4ec,stroke:#ef5350,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class A input;
+    class B,C,F process;
+    class D key;
+    class E1,E2,E3 data;
+    class G output;
+  </pre></div>
+<p>分发路径由路由分数决定，也因此同时承载两项目标：</p>
+<ul>
+<li><strong>模型目标</strong>：将 Token 交给亲和度较高的专家，让不同专家逐渐形成分工；</li>
+<li><strong>系统目标</strong>：让各专家收到相近数量的 Token，避免计算和通信集中在少数设备上。</li>
+</ul>
+<p>若 Router 只按亲和度独立选择 Top-K，这两个目标很容易偏离。</p>
+<p>假设某层有 8 个专家，4096 个 Token 各选择 2 个专家。完全均衡时，每个专家得到 1024 个 Token；实际路由却可能让一个专家收到 1800 个，另一个只收到 300 个。热门专家的输入矩阵更大，所在设备需要更长时间；冷门专家获得的训练样本更少，参数更新也更有限。整层计算必须等待所有专家完成，最慢的专家最终进入关键路径。</p>
+<p>训练系统通常为每个专家设置容量：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>C</mi><mo>=</mo><mrow><mo fence="true">⌈</mo><mfrac><mrow><mi>T</mi><mo>×</mo><mi>K</mi></mrow><mi>N</mi></mfrac><mo>×</mo><mtext>CapacityFactor</mtext><mo fence="true">⌉</mo></mrow></mrow><annotation encoding="application/x-tex">
+C = \left\lceil \frac{T \times K}{N} \times \text{CapacityFactor} \right\rceil
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">C</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.4em;vertical-align:-0.95em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size3">⌈</span></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3603em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.1389em;">T</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">K</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord text"><span class="mord">CapacityFactor</span></span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size3">⌉</span></span></span></span></span></span></span></eqn></section><p>其中，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">T</span></span></span></span></eq> 是本批 Token 数，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">K</span></span></span></span></eq> 是单 Token 激活的专家数，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq> 是专家总数。<code>CapacityFactor</code> 大于 1，意味着系统为负载波动预留了缓冲：</p>
+<ul>
+<li>容量不足时，超出的 Token 只能被丢弃、改道或进入额外路径；</li>
+<li>预留过多时，中间 Buffer 随之扩大，设备需要长期承担峰值空间。</li>
+</ul>
+<p>容量限制处理的是一次前向能否完成，训练过程还会放大长期失衡。某个专家若在早期偶然得到更多 Token，便会获得更多梯度更新，随后更容易继续被 Router 选中；长期缺少 Token 的专家则逐渐失去参与训练的机会。路由坍缩会让名义上的大专家池退化成少数活跃专家，新增参数也就无法转化为有效容量。</p>
+<p>这种训练过程形成的专家分工，很难直接对应人工划分的领域。Router 在每一层、每个 Token 上独立决策：同一句子中的不同 Token 可以走向不同专家，同一 Token 到了下一层也可能改变路径。较低层专家可能偏向词法和局部结构，较高层专家则可能形成更抽象的分工。用“数学专家”或“代码专家”概括它们，会遗漏实际路由的粒度。</p>
+<p>Router 因而同时参与表示学习和运行时调度：亲和度影响模型质量，Token 分布影响执行效率。MoE 需要主动约束两者的偏离，但均衡控制本身也会介入专家的学习过程。</p>
+<h2 id="三、均衡与专门化">三、均衡与专门化</h2>
+<p>最直接的控制方式，是在语言模型损失之外加入负载均衡辅助损失。以 Token Choice 路由为例，可以统计专家被实际选中的比例 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>f</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">f_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.1076em;">f</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.1076em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq>，以及 Router 分配给该专家的平均概率 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>P</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">P_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.1389em;">P</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.1389em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq>，再通过两者的乘积惩罚负载集中：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>L</mi><mrow><mi>b</mi><mi>a</mi><mi>l</mi><mi>a</mi><mi>n</mi><mi>c</mi><mi>e</mi></mrow></msub><mo>=</mo><mi>α</mi><mi>N</mi><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><msub><mi>f</mi><mi>i</mi></msub><msub><mi>P</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">
+L_{balance} = \alpha N \sum_{i=1}^{N} f_iP_i
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">L</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">ba</span><span class="mord mathnormal mtight" style="margin-right:0.0197em;">l</span><span class="mord mathnormal mtight">an</span><span class="mord mathnormal mtight">ce</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:3.106em;vertical-align:-1.2777em;"></span><span class="mord mathnormal" style="margin-right:0.0037em;">α</span><span class="mord mathnormal" style="margin-right:0.109em;">N</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.8283em;"><span style="top:-1.8723em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mrel mtight">=</span><span class="mord mtight">1</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span><span style="top:-4.3em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.109em;">N</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.2777em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.1076em;">f</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.1076em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.1389em;">P</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.1389em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>当少数专家同时获得较高概率和较多 Token 时，辅助损失会推动 Router 分散流量。系数 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>α</mi></mrow><annotation encoding="application/x-tex">\alpha</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.0037em;">α</span></span></span></span></eq> 太小，约束不足；系数太大，Router 又可能为了接近平均分配，放弃更有价值的专家选择。模型质量和设备利用率由此进入同一个训练目标，系数也需要随模型规模、路由方式和数据分布调整。</p>
+<p>DeepSeekMoE 同时调整了专家结构和均衡方式：</p>
+<ul>
+<li><strong>细粒度专家</strong>：拆分单个专家，在相近的激活计算量下组合更多路由专家；</li>
+<li><strong>共享专家</strong>：让所有 Token 都经过一部分公共参数，减轻路由专家重复学习通用知识的压力。</li>
+</ul>
+<p>在此基础上，DeepSeek-V3 为每个路由专家维护一个偏置项。Top-K 根据“亲和度加偏置”的结果做选择：专家过载时降低对应偏置，负载不足时提高偏置。专家输出的组合权重仍由原始亲和度计算，因此偏置主要影响谁能进入 Top-K。系统可以据此修正实际负载，同时减少均衡信号对主损失梯度的直接干预。</p>
+<p>“Auxiliary-Loss-Free”描述的是主要负载均衡策略，并不意味着训练目标完全移除了均衡辅助项。DeepSeek-V3 仍保留较弱的序列级辅助损失，用来防止单条序列内部出现极端失衡。工程上也无需追求每个局部批次绝对平均。只要批次级负载足够稳定、设备没有持续热点，专家仍能形成有效分工，均衡控制就达到了目的。</p>
+<h2 id="四、稀疏计算的通信代价">四、稀疏计算的通信代价</h2>
+<p>均衡策略让各专家获得了相对稳定的输入，但专家池继续扩大后，单张 GPU 很快无法容纳全部权重。Expert Parallel 因而把专家分散到不同设备：每张 GPU 保存一部分专家，Token 再根据路由结果前往对应设备。一个 MoE 层由此增加两次数据交换，先将激活分发给专家，再把专家输出送回原来的序列位置。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    subgraph G0[&quot;GPU 0&quot;]
+        A[&quot;原始 Token&quot;]
+        E0[&quot;Expert 0&quot;]
+        O[&quot;恢复顺序&quot;]
+    end
+    subgraph G1[&quot;GPU 1&quot;]
+        E1[&quot;Expert 1&quot;]
+    end
+    subgraph G2[&quot;GPU 2&quot;]
+        E2[&quot;Expert 2&quot;]
+    end
+
+    A --&gt; R[&quot;Router 与 Dispatch&quot;]
+    R --&gt;|&quot;All-to-All&quot;| E0
+    R --&gt;|&quot;All-to-All&quot;| E1
+    R --&gt;|&quot;All-to-All&quot;| E2
+    E0 --&gt;|&quot;All-to-All&quot;| O
+    E1 --&gt;|&quot;All-to-All&quot;| O
+    E2 --&gt;|&quot;All-to-All&quot;| O
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef key fill:#fce4ec,stroke:#ef5350,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class A input;
+    class R key;
+    class E0,E1,E2 process;
+    class O output;
+  </pre></div>
+<p><strong>权重驻留。</strong> 专家分散之后，首先要处理的仍是权重。稀疏激活允许未选中的专家跳过本次计算，却不会自动减少存储需求。671B 参数若采用 BF16，仅权重的理论体积就约为 1.34 TB。量化可以降低占用，但系统仍需为全部专家安排设备空间。若将冷专家临时卸载到 CPU 或磁盘，权重加载延迟又会进入请求路径，是否可行取决于专家命中分布和延迟目标。</p>
+<p><strong>跨卡通信。</strong> 权重就位之后，Token 还要到达对应专家。Dense FFN 的激活通常留在当前并行组中完成矩阵计算，Expert Parallel 则需要依据每轮路由结果执行 All-to-All。通信量由 Token 数、隐藏维度、激活精度和 Top-K 共同决定，具体路由还会改变各设备实际收发的数据量。网络带宽不足或跨节点链路较慢时，数据搬运可能抵消节省的计算时间。</p>
+<p><strong>专家组批。</strong> Token 到达专家后，计算形态本身也发生了变化。MoE 会把一个大批次拆成多个 Expert Batch。若 128 个 Token 在一层中各选择 8 个专家，并分给 64 个专家，即使完全均衡，每个专家平均也只有 16 个 Token。此时 Expert FFN 面对的矩阵高度很小，GPU 难以通过大 GEMM 充分利用计算单元。FLOPs 虽然下降，Kernel Launch、数据重排和访存的占比却会上升。</p>
+<p>这种差异在 Prefill 和 Decode 之间尤其明显：</p>
+<ul>
+<li><strong>Prefill</strong> 一次处理 Prompt 中的大量 Token，专家往往能获得较大的输入批次，通信与 Kernel 开销更容易被摊薄；</li>
+<li><strong>Decode</strong> 中每条活跃序列每轮只增加少量 Token，并发不足时，专家输入会迅速变得零散。</li>
+</ul>
+<p>Continuous Batching 能够汇集不同请求的 Token，但最终批量仍受实时并发、请求完成时间和调度策略限制。</p>
+<p>模型侧的负载均衡到这里还不够。即便每个专家收到相近数量的 Token，每张 GPU 的工作量也未必相同：多个热门专家若被放在同一设备，计算和通信热点依然会集中。系统还要结合历史路由、专家亲和关系和硬件拓扑安排专家放置，在吞吐、跨节点流量和迁移成本之间取舍。</p>
+<p>这些环节共同解释了 MoE 对高速互联的敏感性。峰值算力决定 Expert FFN 完成矩阵乘法的速度，互联带宽和拓扑则制约激活的传输效率。训练时的大 Token 批次通常更容易摊薄额外成本；在线推理，尤其是低并发 Decode，还需要依靠专家组批、通信重叠、融合 Kernel 和负载观测来缓解稀疏执行的碎片化。</p>
+<h2 id="五、MoE-的收益边界">五、MoE 的收益边界</h2>
+<p>前面的代价最终落在三组彼此关联的指标上：</p>
+<ul>
+<li><strong>容量与计算</strong>：总参数决定权重存储和模型容量，激活参数近似描述单 Token 的主要计算路径；</li>
+<li><strong>负载与算子</strong>：专家负载与 Expert Batch Size 影响设备长尾和 GEMM 利用率；</li>
+<li><strong>通信与请求</strong>：互联带宽与请求并发决定 All-to-All 和专家组批的实际效率。</li>
+</ul>
+<p>训练场景通常拥有大量 Token 和稳定的并行拓扑，更容易用大批次摊薄路由与通信成本。推理收益则更依赖实际负载：高并发 Prefill 可以形成较大的专家批次，低并发 Decode 可能同时受到权重访存、跨卡通信和小 GEMM 限制。因此，两个激活参数相近的模型，也会因为专家数量、Top-K、专家放置和硬件互联不同，表现出截然不同的延迟。</p>
+<p>MoE 用动态选择把更多参数放进模型，同时约束每个 Token 经过的计算路径。未激活参数仍然占用存储，被激活专家也不会天然获得高效执行。总参数与激活参数之间省下的计算，只有依次经过 Router、Dispatch、All-to-All 和 Expert Kernel，才可能转化为真实的吞吐收益。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/07/26/moe-dynamic-routing/">https://wrygill.github.io/2026/07/26/moe-dynamic-routing/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI-Infra</a><a class="post-meta__tags" href="/tags/MoE/">MoE</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F%E6%8E%A8%E7%90%86/">分布式推理</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_3.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1"> 一条 100K 上下文的请求，在 Llama-3-70B（bf16）上会产生约 33GB 的 KV Cache。Prefill 与 Decode 分离部署后，这些数据必须在首 Token 返回之前搬到另一台机器。按 400G InfiniBand 端口的理论带宽估算，全量传输需要约 0.66 秒，而 TTFT 的预算通常只有几百毫秒。 训练侧面对的是同一挑战的另一种形态。一次梯度 AllReduce 要求上千张 GPU 同步完成收发，任何一张卡的迟到都由全体承担。 两类负载调用的协议栈几乎不重叠，回答的却是同一个问题：数据还要被搬几次，每次要等多久。  NCCL、RDMA、InfiniBand、RoCE、NVLink、NIXL、gRPC——这些名词在 AI Infra 的文档里通常以速查表的形式并列出现。速查表能解释名词，应付不了选型。换一张网卡、换一种并行度、把 Prefill 拆出去，每一步都要判断通信栈的哪一层会受影响。 下面分层组织，从物理通路开始逐层向上。箭头代表调用关系：传输与互联是公共底座，训练与推理各自向下取用。      flowchart TB     A[...</div></div></div></a><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_2.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1"> 同一个 70B 模型，Prefill 可以把几千个 token 的 Prompt 一次吃进 GPU，Decode 却只能一个 token 一个 token 往前走。 权重没有变化，慢的是生成方式本身：每推进 1 个 token，140GB 权重就要从显存里完整读一遍。 投机解码（Speculative Decoding，SD）先用廉价草稿多猜几步，再让大模型一次验证。MTP（Multi-Token Prediction）继续往前走，把多 token 预测写进训练目标，让草稿能力从外挂变成模型原生接口。  一、串行 Decode Decode 慢的根源不在算力，在访存。 每生成一个 token，模型要把全部权重从 HBM 读进计算单元。batch=1 时，一次 forward 的算术强度约为 2N2N2N FLOPs 对应 2N2N2N 字节访存，即 ∼1\sim 1∼1 FLOP/byte。H100 的 ridge point 在 ∼300\sim 300∼300 FLOP/byte 量级，decode 离它有近三百倍差距。计算单元大量空转，延迟下限由显存带宽直接决定：    ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/06/09/transformer-architecture/" title="Transformer 架构与注意力机制"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-10</div><div class="info-item-2">Transformer 架构与注意力机制</div></div><div class="info-2"><div class="info-item-1"> 第一篇结束时，每个 token 是一个 ddd 维向量。“cat” 和 “dog” 在语义空间里距离很近，但它们各自的向量是独立的——token iii 不知道序列里还有 token jjj。 “The animal didn’t cross the street because it was too tired.” 模型处理到 “it” 时，怎么知道 “it” 指的是 “animal” 而不是 “street”？ Transformer 要解决的只有一件事：让每个 token 的最终表示融合整个序列的上下文。   一、Self-Attention 机制 给定一个长度为 NNN 的 token 序列，每个 token 对应一个 ddd 维向量。要让 tokeni_ii​ 的表示融合其他 token 的信息，最直接的想法是加权平均——权重由 tokeni_ii​ 和 tokenj_jj​ 的相似度决定。这就是 Self-Attention 的起点。 QKV 注意力分数 输入矩阵 X∈RN×dX \in \mathbb{R}^{N \times d}X∈RN×d（NNN 个 tok...</div></div></div></a><a class="pagination-related" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</div></div><div class="info-2"><div class="info-item-1"> 一台 A100 提供 40 GB 显存，跑 OPT 13B 模型（FP16 权重 26 GB），剩余 14 GB 全部给 KV cache。按现有框架的默认做法，每个请求按 max sequence length 2048 预留连续内存，单请求 1.6 GB，14 GB 同时容纳 8 路并发；但这 8 路里平均输出只有 200 token，实际占用的内存不到 160 MB，其余 1.44 GB 全程空着等分配上限到来。 同一份带固定 system prompt 的多轮对话负载分别在 vLLM 和 SGLang 上跑，第一个 token 延迟差 10–20%。差距不出在模型权重，也不出在 GPU 型号，而出在缓存 KV 时背后用的数据结构。  这篇文章讲两件事：vLLM 的 PagedAttention 怎么把 KV cache 从&quot;一段连续显存&quot;改造成&quot;按块非连续存放&quot;，SGLang 的 RadixAttention 又怎么在块状 KV 之上把&quot;跨请求自动复用&quot;做成了树形索引。两者经常被并列提起，但它们处在栈的不同层—...</div></div></div></a><a class="pagination-related" href="/2026/06/01/llm-data-pipeline/" title="从文本到向量：LLM 的数据管道"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-02</div><div class="info-item-2">从文本到向量：LLM 的数据管道</div></div><div class="info-2"><div class="info-item-1"> 你在终端里输入一段 prompt，几秒后模型返回了一段流畅的回答。 但在模型&quot;看到&quot;你的 prompt 之前，它已经花了数月时间阅读互联网上的万亿级文本。 这些文本——HTML、PDF、代码、论坛帖子——是如何变成模型能理解的数字的？  本文是系列第一篇，回答一个问题：如何把人类语言变成模型能吃的数字？ 链路分三步：清洗原始语料 → 将文本切分为 Token → 将 Token 映射为向量。每一步的输出是下一步的输入，每一步的设计决策都直接影响模型的最终能力。  一、语料工程：从互联网到训练数据集 原始数据长什么样 Common Crawl 每月抓取数十亿网页，原始数据是 HTML。随便取一条： 1234567&lt;html&gt;&lt;head&gt;&lt;title&gt;Buy cheap shoes!!!&lt;/title&gt;&lt;/head&gt;&lt;body&gt;  &lt;div class=&quot;ad&quot;&gt;CLICK HERE FOR DEALS&lt;/div&gt;  &lt;p&gt;The mi...</div></div></div></a><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-25</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1"> 同一个 70B 模型，Prefill 可以把几千个 token 的 Prompt 一次吃进 GPU，Decode 却只能一个 token 一个 token 往前走。 权重没有变化，慢的是生成方式本身：每推进 1 个 token，140GB 权重就要从显存里完整读一遍。 投机解码（Speculative Decoding，SD）先用廉价草稿多猜几步，再让大模型一次验证。MTP（Multi-Token Prediction）继续往前走，把多 token 预测写进训练目标，让草稿能力从外挂变成模型原生接口。  一、串行 Decode Decode 慢的根源不在算力，在访存。 每生成一个 token，模型要把全部权重从 HBM 读进计算单元。batch=1 时，一次 forward 的算术强度约为 2N2N2N FLOPs 对应 2N2N2N 字节访存，即 ∼1\sim 1∼1 FLOP/byte。H100 的 ridge point 在 ∼300\sim 300∼300 FLOP/byte 量级，decode 离它有近三百倍差距。计算单元大量空转，延迟下限由显存带宽直接决定：    ...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1"> 一个 Llama 2 7B 模型，FP16 权重 13GB。把它装进 A100 40GB，看上去绰绰有余。batch size 拉到 8，上下文设 4096，跑两步 OOM 了。13GB 的模型在 40GB 的卡上怎么会爆？ 原因是显存的主体不止权重。KV Cache 随请求数和上下文长度线性增长，注意力中间结果随序列长度平方膨胀，框架的 workspace、通信 buffer 还要再吃一块。三块加起来，部署前不算清楚，运维线上就要在 dashboard 里看 OOM 告警。 这篇文章回答一个具体问题：给定模型、上下文长度和并发请求数，一张卡到底会占多少显存。  一、权重的显存 最直觉的部分。模型的参数量 NNN 是一个固定数字，权重显存等于参数量乘以每个参数占的字节数： WeightMem=N×bytes/param\text{WeightMem} = N \times \text{bytes/param}WeightMem=N×bytes/paramLlama 2 7B 标称 7B，实际参数量约 6.7B（含 embedding 与每一层的 attention/FFN 矩阵...</div></div></div></a><a class="pagination-related" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">vLLM 推理计算图</div></div><div class="info-2"><div class="info-item-1"> 同一个 Transformer 模型，连续两轮 Decode 执行的层结构几乎完全一致。第一轮可能有 32 条序列参与计算，下一轮只剩 27 条，同时又有一段新 Prompt 等待 Prefill。模型权重没有改变，参与计算的 Token、KV Cache 位置和 Attention 元数据却全部发生了变化。 这正是 LLM 推理计算图面对的基本矛盾：模型结构相对稳定，在线负载持续变化。  直接调用 PyTorch 模型时，一次前向可以简化为输入 Tensor 经过若干算子后产生 Logits。推理框架面对的工作更多：它要持续接收请求、组织批次、分配 KV Cache、执行模型、采样 Token，再把未完成的序列送入下一轮调度。即使模型层没有变化，每轮前向的输入形状和运行时状态也可能不同。 计算图提供了一种处理这种矛盾的方式。框架先把模型前向表示成可分析的图，在其中识别稳定结构、改写算子并生成 Kernel；随后从 GPU 执行序列中选择适合捕获的部分，用 CUDA Graph 降低重复提交的成本。调度器仍然保留动态决策能力，并在每轮执行前准备新的输入与元数据。 理解 vLLM...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">29</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">34</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%8F%82%E6%95%B0%E4%B8%8E%E8%AE%A1%E7%AE%97%E8%A7%A3%E8%80%A6"><span class="toc-number">1.</span> <span class="toc-text">一、参数与计算解耦</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E8%B7%AF%E7%94%B1%E7%9A%84%E5%8F%8C%E9%87%8D%E7%9B%AE%E6%A0%87"><span class="toc-number">2.</span> <span class="toc-text">二、路由的双重目标</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%9D%87%E8%A1%A1%E4%B8%8E%E4%B8%93%E9%97%A8%E5%8C%96"><span class="toc-number">3.</span> <span class="toc-text">三、均衡与专门化</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E7%A8%80%E7%96%8F%E8%AE%A1%E7%AE%97%E7%9A%84%E9%80%9A%E4%BF%A1%E4%BB%A3%E4%BB%B7"><span class="toc-number">4.</span> <span class="toc-text">四、稀疏计算的通信代价</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81MoE-%E7%9A%84%E6%94%B6%E7%9B%8A%E8%BE%B9%E7%95%8C"><span class="toc-number">5.</span> <span class="toc-text">五、MoE 的收益边界</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="vLLM 推理计算图"/></a><div class="content"><a class="title" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图">vLLM 推理计算图</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

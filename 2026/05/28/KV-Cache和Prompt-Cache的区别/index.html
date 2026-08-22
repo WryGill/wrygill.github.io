@@ -1,0 +1,627 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>KV Cache 和 Prompt Cache 的区别 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="KV Cache 和 Prompt Cache 的区别 如果你用过 OpenAI 的 API，可能注意过响应里偶尔会出现这么一个字段： 12345678&quot;usage&quot;: &#123;  &quot;prompt_tokens&quot;: 2006,  &quot;completion_tokens&quot;: 300,  &quot;total_tokens&quot;:">
+<meta property="og:type" content="article">
+<meta property="og:title" content="KV Cache 和 Prompt Cache 的区别">
+<meta property="og:url" content="https://wrygill.github.io/2026/05/28/KV-Cache%E5%92%8CPrompt-Cache%E7%9A%84%E5%8C%BA%E5%88%AB/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="KV Cache 和 Prompt Cache 的区别 如果你用过 OpenAI 的 API，可能注意过响应里偶尔会出现这么一个字段： 12345678&quot;usage&quot;: &#123;  &quot;prompt_tokens&quot;: 2006,  &quot;completion_tokens&quot;: 300,  &quot;total_tokens&quot;:">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_1.jpg">
+<meta property="article:published_time" content="2026-05-28T06:58:00.000Z">
+<meta property="article:modified_time" content="2026-08-22T14:22:57.904Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="推理优化">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_1.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "KV Cache 和 Prompt Cache 的区别",
+  "url": "https://wrygill.github.io/2026/05/28/KV-Cache%E5%92%8CPrompt-Cache%E7%9A%84%E5%8C%BA%E5%88%AB/",
+  "image": "https://wrygill.github.io/img/miku_cover_1.jpg",
+  "datePublished": "2026-05-28T06:58:00.000Z",
+  "dateModified": "2026-08-22T14:22:57.904Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/05/28/KV-Cache%E5%92%8CPrompt-Cache%E7%9A%84%E5%8C%BA%E5%88%AB/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'KV Cache 和 Prompt Cache 的区别',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_1.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">KV Cache 和 Prompt Cache 的区别</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">KV Cache 和 Prompt Cache 的区别</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-05-28T06:58:00.000Z" title="发表于 2026-05-28 14:58:00">2026-05-28</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-22T14:22:57.904Z" title="更新于 2026-08-22 22:22:57">2026-08-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B/">大模型</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>KV Cache 和 Prompt Cache 的区别</h1>
+<p>如果你用过 OpenAI 的 API，可能注意过响应里偶尔会出现这么一个字段：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">&quot;usage&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;prompt_tokens&quot;</span><span class="punctuation">:</span> <span class="number">2006</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;completion_tokens&quot;</span><span class="punctuation">:</span> <span class="number">300</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;total_tokens&quot;</span><span class="punctuation">:</span> <span class="number">2306</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;prompt_tokens_details&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;cached_tokens&quot;</span><span class="punctuation">:</span> <span class="number">1920</span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>明明 prompt 一样长，但 <code>cached_tokens</code> 显示这 2006 个 token 里有 1920 个命中了缓存——意味着你只需要为 86 个 token 付全价，剩下的按折扣价算。</p>
+<p>再翻翻 vLLM 或者 HuggingFace 的推理教程，又会频繁撞见另一个词：KV Cache。文档里说它是推理加速的核心，vLLM 的 PagedAttention 本质上就是在管理 KV Cache 的分配和复用。</p>
+<p>都是缓存，都跟 token 的计算过程有关，这两个东西到底什么关系？</p>
+<h2 id="一、KV-Cache">一、KV Cache</h2>
+<p>要理解 KV Cache，得先看自回归生成到底在算什么。</p>
+<p>Transformer 生成文本是一步一步来的。给它&quot;今天天气&quot;，它预测下一个 token 是&quot;真&quot;。然后给它&quot;今天天气真&quot;，预测&quot;好&quot;。如此反复，直到吐出结束符。</p>
+<p>这个过程里，每一步都要跑完整的 Attention。而 Attention 的本质是每个 token 和序列中所有 token 做交互——第一个 token 和所有 token 算，第二个 token 也和所有 token 算，以此类推。所以第 n 步的 Attention 计算量是 O(n²)。</p>
+<p>问题是：前面 token 的交互结果，是不是每一步都要重新算？</p>
+<h4 id="不变的-K-和-V">不变的 K 和 V</h4>
+<p>Attention 的计算，核心是三个矩阵：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Q（Query）：当前 token 在&quot;找什么&quot;</span><br><span class="line">K（Key）：  每个 token 的&quot;索引标签&quot;</span><br><span class="line">V（Value）：每个 token 的&quot;实际内容&quot;</span><br></pre></td></tr></table></figure>
+<p>对于已经生成过的历史 token，它们的 K 和 V 不会再变了——因为 K 和 V 只取决于 token 自身的 embedding，跟后面来了什么新 token 没关系。唯一在变的是 Q——每个新 token 都有自己要&quot;找&quot;的东西。</p>
+<p>那为什么还要每步都重算全部 K 和 V？直接存起来不就行了。</p>
+<p>这就是 KV Cache。第一步（prefill 阶段）把 prompt 的 K 和 V 全部算好存起来。之后每生成一个新 token（decode 阶段），只算这个新 token 的 Q、K、V，然后把新 K、V 追加到缓存里，Q 和缓存的全部 K、V 做 Attention。</p>
+<p>计算量从 O(n²) 压到 O(n)。代价是显存里要多存一份越来越长的 K/V 张量——序列每长一个 token，每一层 Attention 的缓存就多一行。</p>
+<h4 id="代码实现">代码实现</h4>
+<p>先看没有缓存的版本，每一步都要重算所有 token：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> torch</span><br><span class="line"><span class="keyword">import</span> torch.nn <span class="keyword">as</span> nn</span><br><span class="line"><span class="keyword">import</span> math</span><br><span class="line"></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">SimpleAttention</span>(nn.Module):</span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">__init__</span>(<span class="params">self, d_model=<span class="number">512</span>, n_heads=<span class="number">8</span></span>):</span><br><span class="line">        <span class="built_in">super</span>().__init__()</span><br><span class="line">        <span class="variable language_">self</span>.d_model = d_model       <span class="comment"># 模型总维度，比如 512</span></span><br><span class="line">        <span class="variable language_">self</span>.n_heads = n_heads       <span class="comment"># 注意力头数，比如 8</span></span><br><span class="line">        <span class="variable language_">self</span>.d_head = d_model // n_heads  <span class="comment"># 每个头的维度，512/8=64</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># 三个线性层，把输入 embedding 投影为 Q、K、V</span></span><br><span class="line">        <span class="comment"># 输入形状: (batch, seq_len, d_model) → 输出: (batch, seq_len, d_model)</span></span><br><span class="line">        <span class="variable language_">self</span>.W_q = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line">        <span class="variable language_">self</span>.W_k = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line">        <span class="variable language_">self</span>.W_v = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line">        <span class="variable language_">self</span>.W_o = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)  <span class="comment"># 输出投影</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">forward</span>(<span class="params">self, x</span>):</span><br><span class="line">        <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">        x: (batch=1, seq_len, d_model=512), 比如 (1, 5, 512) 表示 5 个 token</span></span><br><span class="line"><span class="string">        返回: attention 输出, 形状也是 (1, seq_len, 512)</span></span><br><span class="line"><span class="string">        &quot;&quot;&quot;</span></span><br><span class="line">        B, T, C = x.shape  <span class="comment"># B=1(批次), T=seq_len(序列长度), C=512</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第一步：把所有 token 投影为 Q、K、V ——</span></span><br><span class="line">        <span class="comment"># 如果序列有 5 个 token，这三个结果都是 (1, 5, 512)</span></span><br><span class="line">        q = <span class="variable language_">self</span>.W_q(x)  <span class="comment"># 每个 token 的&quot;我要找什么&quot;</span></span><br><span class="line">        k = <span class="variable language_">self</span>.W_k(x)  <span class="comment"># 每个 token 的&quot;我是谁&quot;</span></span><br><span class="line">        v = <span class="variable language_">self</span>.W_v(x)  <span class="comment"># 每个 token 的&quot;我的内容&quot;</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第二步：拆成多头 ——</span></span><br><span class="line">        <span class="comment"># 把 512 维拆成 8 个头 × 64 维</span></span><br><span class="line">        <span class="comment"># (1, 5, 512) → (1, 5, 8, 64) → (1, 8, 5, 64)</span></span><br><span class="line">        q = q.view(B, T, <span class="variable language_">self</span>.n_heads, <span class="variable language_">self</span>.d_head).transpose(<span class="number">1</span>, <span class="number">2</span>)</span><br><span class="line">        k = k.view(B, T, <span class="variable language_">self</span>.n_heads, <span class="variable language_">self</span>.d_head).transpose(<span class="number">1</span>, <span class="number">2</span>)</span><br><span class="line">        v = v.view(B, T, <span class="variable language_">self</span>.n_heads, <span class="variable language_">self</span>.d_head).transpose(<span class="number">1</span>, <span class="number">2</span>)</span><br><span class="line">        <span class="comment"># 现在每个形状都是 (1, 8, 5, 64): 1个批次, 8个头, 5个token, 每头64维</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第三步：计算注意力分数 ——</span></span><br><span class="line">        <span class="comment"># Q 和 K 做点积，得到每个 token 对每个 token 的&quot;关注度&quot;</span></span><br><span class="line">        <span class="comment"># (1, 8, 5, 64) × (1, 8, 64, 5) → (1, 8, 5, 5)</span></span><br><span class="line">        attn_scores = (q @ k.transpose(-<span class="number">2</span>, -<span class="number">1</span>)) / math.sqrt(<span class="variable language_">self</span>.d_head)</span><br><span class="line">        <span class="comment"># attn_scores[0, h, i, j] 表示第 h 个头里，token i 对 token j 的关注度</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第四步：因果掩码（causal mask） ——</span></span><br><span class="line">        <span class="comment"># 生成时不能让当前 token &quot;看到&quot;后面的 token</span></span><br><span class="line">        <span class="comment"># 把上三角（未来位置）填成 -inf，softmax 后变成 0</span></span><br><span class="line">        causal_mask = torch.triu(</span><br><span class="line">            torch.ones(T, T), diagonal=<span class="number">1</span></span><br><span class="line">        ).<span class="built_in">bool</span>()  <span class="comment"># 上三角为 True</span></span><br><span class="line">        attn_scores = attn_scores.masked_fill(</span><br><span class="line">            causal_mask, <span class="built_in">float</span>(<span class="string">&#x27;-inf&#x27;</span>)</span><br><span class="line">        )  <span class="comment"># 把未来位置设为 -inf</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第五步：softmax + 加权求和 ——</span></span><br><span class="line">        attn_weights = torch.softmax(attn_scores, dim=-<span class="number">1</span>)  <span class="comment"># (1, 8, 5, 5)</span></span><br><span class="line">        out = attn_weights @ v  <span class="comment"># (1, 8, 5, 5) × (1, 8, 5, 64) → (1, 8, 5, 64)</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第六步：拼回头，过输出投影 ——</span></span><br><span class="line">        out = out.transpose(<span class="number">1</span>, <span class="number">2</span>).contiguous().view(B, T, C)  <span class="comment"># → (1, 5, 512)</span></span><br><span class="line">        out = <span class="variable language_">self</span>.W_o(out)  <span class="comment"># (1, 5, 512)</span></span><br><span class="line">        <span class="keyword">return</span> out</span><br></pre></td></tr></table></figure>
+<p>上面这个版本每一步都从头算 5 个 token 的 Q、K、V。序列变长，计算量平方级增长。</p>
+<p>接下来是加了 KV Cache 的版本。改动就一处：把 forward 拆成两步——第一次调用（prefill）建缓存，后续调用（decode）只算新 token 并追加：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">SimpleAttentionWithKVCache</span>(nn.Module):</span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">__init__</span>(<span class="params">self, d_model=<span class="number">512</span>, n_heads=<span class="number">8</span></span>):</span><br><span class="line">        <span class="built_in">super</span>().__init__()</span><br><span class="line">        <span class="variable language_">self</span>.d_model = d_model</span><br><span class="line">        <span class="variable language_">self</span>.n_heads = n_heads</span><br><span class="line">        <span class="variable language_">self</span>.d_head = d_model // n_heads</span><br><span class="line"></span><br><span class="line">        <span class="variable language_">self</span>.W_q = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line">        <span class="variable language_">self</span>.W_k = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line">        <span class="variable language_">self</span>.W_v = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line">        <span class="variable language_">self</span>.W_o = nn.Linear(d_model, d_model, bias=<span class="literal">False</span>)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">forward</span>(<span class="params">self, x, kv_cache=<span class="literal">None</span>, start_pos=<span class="number">0</span></span>):</span><br><span class="line">        <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">        x: 当前输入。prefill 时是整个 prompt (1, prompt_len, 512)</span></span><br><span class="line"><span class="string">                      decode 时只有 1 个 token (1, 1, 512)</span></span><br><span class="line"><span class="string">        kv_cache: 之前缓存的 K 和 V，是一个 dict &#123;&#x27;k&#x27;: tensor, &#x27;v&#x27;: tensor&#125;</span></span><br><span class="line"><span class="string">                  第一次调用时传 None</span></span><br><span class="line"><span class="string">        start_pos: 当前 token 在整个序列中的起始位置，给 RoPE 用的</span></span><br><span class="line"><span class="string">        &quot;&quot;&quot;</span></span><br><span class="line">        B, T_curr, C = x.shape  <span class="comment"># prefill: T_curr=5, decode: T_curr=1</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第一步：只投影当前输入的 token ——</span></span><br><span class="line">        <span class="comment"># prefill 时 x 有 5 个 token → q/k/v 都是 (1, 5, 512)</span></span><br><span class="line">        <span class="comment"># decode 时 x 只有 1 个 token → q/k/v 都是 (1, 1, 512)</span></span><br><span class="line">        q = <span class="variable language_">self</span>.W_q(x)</span><br><span class="line">        k_new = <span class="variable language_">self</span>.W_k(x)  <span class="comment"># 新算出来的 K，后面叫 k_new 区分一下</span></span><br><span class="line">        v_new = <span class="variable language_">self</span>.W_v(x)</span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第二步：拆多头 ——</span></span><br><span class="line">        q = q.view(B, T_curr, <span class="variable language_">self</span>.n_heads, <span class="variable language_">self</span>.d_head).transpose(<span class="number">1</span>, <span class="number">2</span>)</span><br><span class="line">        k_new = k_new.view(B, T_curr, <span class="variable language_">self</span>.n_heads, <span class="variable language_">self</span>.d_head).transpose(<span class="number">1</span>, <span class="number">2</span>)</span><br><span class="line">        v_new = v_new.view(B, T_curr, <span class="variable language_">self</span>.n_heads, <span class="variable language_">self</span>.d_head).transpose(<span class="number">1</span>, <span class="number">2</span>)</span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第三步：处理 KV Cache ——</span></span><br><span class="line">        <span class="keyword">if</span> kv_cache <span class="keyword">is</span> <span class="literal">None</span>:</span><br><span class="line">            <span class="comment"># prefill 阶段：没有缓存，直接用当前计算的 K、V</span></span><br><span class="line">            k = k_new  <span class="comment"># (1, 8, 5, 64)，5 是 prompt 长度</span></span><br><span class="line">            v = v_new</span><br><span class="line">        <span class="keyword">else</span>:</span><br><span class="line">            <span class="comment"># decode 阶段：把新 token 的 K、V 追加到缓存后面</span></span><br><span class="line">            <span class="comment"># kv_cache[&#x27;k&#x27;]: 之前所有 token 的 K，形状 (1, 8, prev_len, 64)</span></span><br><span class="line">            <span class="comment"># k_new:         当前 1 个新 token 的 K，形状 (1, 8, 1, 64)</span></span><br><span class="line">            <span class="comment"># torch.cat 沿 seq_len 维度拼接 → (1, 8, prev_len+1, 64)</span></span><br><span class="line">            k = torch.cat([kv_cache[<span class="string">&#x27;k&#x27;</span>], k_new], dim=<span class="number">2</span>)</span><br><span class="line">            v = torch.cat([kv_cache[<span class="string">&#x27;v&#x27;</span>], v_new], dim=<span class="number">2</span>)</span><br><span class="line"></span><br><span class="line">        <span class="comment"># 更新缓存：把拼接后的完整 K、V 存下来，下次 decode 接着用</span></span><br><span class="line">        new_cache = &#123;<span class="string">&#x27;k&#x27;</span>: k, <span class="string">&#x27;v&#x27;</span>: v&#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第四步：用完整的 K、V 做 Attention ——</span></span><br><span class="line">        <span class="comment"># q 只有当前 token（decode 时 (1, 8, 1, 64)），但 k、v 包含了全部历史</span></span><br><span class="line">        <span class="comment"># q @ k^T: (1, 8, 1, 64) × (1, 8, 64, all_len) → (1, 8, 1, all_len)</span></span><br><span class="line">        attn_scores = (q @ k.transpose(-<span class="number">2</span>, -<span class="number">1</span>)) / math.sqrt(<span class="variable language_">self</span>.d_head)</span><br><span class="line"></span><br><span class="line">        <span class="comment"># decode 时不需要 causal mask，因为 q 只有一个 token，</span></span><br><span class="line">        <span class="comment"># 它天然只能&quot;看到&quot; k 里的所有历史 token（都是过去的）</span></span><br><span class="line"></span><br><span class="line">        attn_weights = torch.softmax(attn_scores, dim=-<span class="number">1</span>)</span><br><span class="line">        out = attn_weights @ v  <span class="comment"># (1, 8, 1, all_len) × (1, 8, all_len, 64) → (1, 8, 1, 64)</span></span><br><span class="line"></span><br><span class="line">        <span class="comment"># —— 第五步：拼回头，过输出投影 ——</span></span><br><span class="line">        out = out.transpose(<span class="number">1</span>, <span class="number">2</span>).contiguous().view(B, T_curr, C)</span><br><span class="line">        out = <span class="variable language_">self</span>.W_o(out)</span><br><span class="line">        <span class="keyword">return</span> out, new_cache  <span class="comment"># 把缓存也返回出去</span></span><br></pre></td></tr></table></figure>
+<p>对比两个版本，核心区别就两处：</p>
+<ol>
+<li>不重算 K、V：decode 阶段 <code>x</code> 只有 1 个 token，<code>W_k(x)</code> 和 <code>W_v(x)</code> 只对这个新 token 做投影，而不是对整个序列重做</li>
+<li>拼接缓存：<code>torch.cat([kv_cache['k'], k_new], dim=2)</code> 把新老 K 拼在一起，老的不动，新的追加</li>
+</ol>
+<p>生成循环的用法：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">def</span> <span class="title function_">generate</span>(<span class="params">model, prompt_tokens, max_new_tokens=<span class="number">50</span></span>):</span><br><span class="line">    <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">    prompt_tokens: 输入的 prompt token ID 列表, 比如 [101, 202, 303, 404]</span></span><br><span class="line"><span class="string">    &quot;&quot;&quot;</span></span><br><span class="line">    <span class="comment"># 阶段一：Prefill —— 整段 prompt 一次过完</span></span><br><span class="line">    <span class="comment"># 把 token ID 转成 embedding，形状 (1, 4, 512)</span></span><br><span class="line">    prompt_emb = model.embed(prompt_tokens)</span><br><span class="line">    <span class="comment"># 第一次调用 forward，kv_cache=None，建缓存</span></span><br><span class="line">    <span class="comment"># output 形状 (1, 4, 512)，kv_cache 里存了 4 个 token 的 K/V</span></span><br><span class="line">    output, kv_cache = model(prompt_emb, kv_cache=<span class="literal">None</span>, start_pos=<span class="number">0</span>)</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 取最后一个位置的输出来预测下一个 token</span></span><br><span class="line">    next_logits = output[:, -<span class="number">1</span>, :]  <span class="comment"># (1, 512)</span></span><br><span class="line">    next_token = torch.argmax(next_logits, dim=-<span class="number">1</span>).item()  <span class="comment"># 出一个整数 token ID</span></span><br><span class="line"></span><br><span class="line">    generated = [next_token]  <span class="comment"># 存生成结果</span></span><br><span class="line">    current_pos = <span class="built_in">len</span>(prompt_tokens)  <span class="comment"># 当前序列总长度 = 4</span></span><br><span class="line"></span><br><span class="line">    <span class="comment"># 阶段二：Decode —— 逐 token 生成</span></span><br><span class="line">    <span class="keyword">for</span> _ <span class="keyword">in</span> <span class="built_in">range</span>(max_new_tokens - <span class="number">1</span>):</span><br><span class="line">        <span class="comment"># 每次只喂 1 个新 token 的 embedding</span></span><br><span class="line">        token_emb = model.embed([next_token])  <span class="comment"># (1, 1, 512)</span></span><br><span class="line">        <span class="comment"># 传入已有的 kv_cache，并告诉模型当前是第几个 token</span></span><br><span class="line">        output, kv_cache = model(</span><br><span class="line">            token_emb,</span><br><span class="line">            kv_cache=kv_cache,       <span class="comment"># 之前的 K/V 还在</span></span><br><span class="line">            start_pos=current_pos    <span class="comment"># 第 4 个位置（从 0 开始）</span></span><br><span class="line">        )</span><br><span class="line">        <span class="comment"># output 只包含当前 token 的结果 (1, 1, 512)</span></span><br><span class="line">        next_logits = output[:, -<span class="number">1</span>, :]</span><br><span class="line">        next_token = torch.argmax(next_logits, dim=-<span class="number">1</span>).item()</span><br><span class="line">        generated.append(next_token)</span><br><span class="line">        current_pos += <span class="number">1</span></span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> next_token == eos_token_id:</span><br><span class="line">            <span class="keyword">break</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> generated</span><br></pre></td></tr></table></figure>
+<p>每一步 decode 循环里，模型只处理 1 个新 token，<code>torch.cat</code> 把它追加到缓存里，K 和 V 张量随序列增长越来越长。但每次只算 1 个 token 的投影，历史 token 的 K/V 直接复用。</p>
+<p><img src="/assets/kv-cache-post/kv-cache-prefill-decode.png" alt="KV Cache 的 Prefill 和 Decode 阶段对比"></p>
+<h4 id="显存开销">显存开销</h4>
+<p>KV Cache 省了计算，但吃显存。大致算一下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">kv_size = 2 × layers × kv_heads × head_dim × seq_len × precision</span><br></pre></td></tr></table></figure>
+<p>拿一个 7B 模型来说，假设 32 层、32 个 KV head、head_dim=128、FP16：</p>
+<ul>
+<li>每个 token 约 <code>2 × 32 × 32 × 128 × 2 = 524,288 字节 ≈ 0.5 MB</code></li>
+<li>1000 token 的上下文，一个请求约 512 MB</li>
+<li>100 个并发请求，光 KV Cache 就占 50 GB</li>
+</ul>
+<p>这也是大模型推理吃显存最主要的原因之一。但显存占用大只是一方面，更麻烦的是碎片问题。</p>
+<h4 id="PagedAttention：解决-KV-Cache-的显存碎片">PagedAttention：解决 KV Cache 的显存碎片</h4>
+<p>在没有 PagedAttention 之前，KV Cache 的分配方式很粗暴：为每个请求预分配一块连续显存，大小按最大序列长度预留。</p>
+<p>比如你设置 <code>max_seq_len=2048</code>，每个请求一来就先占掉 2048 token 的 KV Cache 空间。问题是——</p>
+<p>内部碎片：大部分请求根本没用到 2048 token。一个只生成 200 token 的请求，也霸着 2048 的坑，剩下的全浪费了。</p>
+<p>外部碎片：请求 A 结束释放了它那块显存，请求 B 结束又释放了一块。中间留下的空隙东一块西一块——某个新请求需要 512 token 的连续空间，总空闲空间是够的，但没有一块连续区域足够大，分配失败。</p>
+<p>这就是 vLLM 的 PagedAttention 要解决的问题。思路直接抄 OS 的虚拟内存分页：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">传统分配（连续内存）：</span><br><span class="line">┌──────────────────────────────────────────────┐</span><br><span class="line">│ 请求A KV Cache (0~2048 tokens)               │ ← 不管用不用，先占一整块</span><br><span class="line">├──────────────────────────────────────────────┤</span><br><span class="line">│ 请求B KV Cache (0~2048 tokens)               │</span><br><span class="line">├──────────────────────────────────────────────┤</span><br><span class="line">│           [碎片]                              │ ← A 释放后留下空隙</span><br><span class="line">└──────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">PagedAttention（分块分配）：</span><br><span class="line">┌──────┬──────┬──────┬──────┬──────┬──────┬──────┐</span><br><span class="line">│ blk0 │ blk1 │ blk2 │ blk3 │ blk4 │ blk5 │ blk6 │  ← 预分配固定大小的 block 池</span><br><span class="line">└──────┴──────┴──────┴──────┴──────┴──────┴──────┘</span><br><span class="line">   A      A      B      B      A      -      B     ← 请求动态占用，按需分配</span><br><span class="line">                                                     &quot;-&quot; = 空闲</span><br></pre></td></tr></table></figure>
+<p>不再按请求预分配一整块连续空间，而是提前在 GPU 显存里划好一堆固定大小的 KV block（每个 block 默认存 16 个 token 的 K/V）。请求需要存新的 KV 时，从池子里拿空闲 block，用完还回去。</p>
+<p>核心数据结构：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@dataclass</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">KVCacheBlock</span>:</span><br><span class="line">    block_id: <span class="built_in">int</span>            <span class="comment"># 物理 GPU 显存位置</span></span><br><span class="line">    ref_cnt: <span class="built_in">int</span> = <span class="number">0</span>         <span class="comment"># 有多少个请求在引用这个 block</span></span><br><span class="line">    block_hash: ... = <span class="literal">None</span>   <span class="comment"># 内容哈希，给 Prefix Caching 用的（后面说）</span></span><br></pre></td></tr></table></figure>
+<p>请求的 KV Cache 不再是一整块连续内存，而是一个 block 链表。序列每增长 16 个 token，就从池子里申请一个新 block 挂到链表末尾。</p>
+<p><img src="/assets/kv-cache-post/vllm-paged-attention.png" alt="vLLM PagedAttention 块分配示意图"></p>
+<p>PagedAttention 解决的是单请求内部的 KV Cache 显存管理问题——消灭碎片、按需分配。但它顺带解锁了另一件事：因为 KV Cache 已经按 block 拆开了，多个请求的公共前缀自然可以指向同一组物理 block。这就是下一节要讲的 Prompt Cache。</p>
+<h2 id="二、Prompt-Cache">二、Prompt Cache</h2>
+<p>KV Cache 有一个局限：它的生命周期跟着一次请求走。prefill 建缓存，decode 用缓存，生成结束就释放。下一个请求来了，就算是完全相同的 system prompt，也得从头再算一遍。</p>
+<p>这在单次对话的场景里不是问题。但在一个 API 服务每天处理几万次请求的场景下，就是巨大的浪费——大量请求的 system prompt 一模一样，每一次都要重新算一遍 K/V。</p>
+<p>Prompt Cache 做的就是这件事：把公共前缀的 KV 状态跨请求保留下来。后面的请求如果前缀匹配，直接复用，只算不同的部分。</p>
+<p>它的底层没有任何新东西——复用的就是普通的 KV Cache（K/V 张量）。区别只在于它把 KV Cache 的生命周期从&quot;一次请求&quot;拉长到了&quot;跨请求&quot;，加了一层管理逻辑：什么该缓存、怎么匹配、何时淘汰。</p>
+<h4 id="OpenAI：自动哈希路由">OpenAI：自动哈希路由</h4>
+<p>OpenAI 的 Prompt Caching 对使用者来说最简单——不需要改任何代码。</p>
+<p>只要 prompt 超过 1024 token，OpenAI 就会自动对前缀做缓存。核心原理是哈希路由，整个流程如下：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart TD
+    A[&quot;请求到达 API 网关&quot;] --&gt; B[&quot;截取 prompt 前 ~256 token&quot;]
+    B --&gt; C[&quot;计算前缀哈希: hash(prefix)&quot;]
+    C --&gt; D{&quot;哈希路由表中有\n对应机器？&quot;}
+    D --&gt;|有| E[&quot;路由到机器 M&quot;]
+    D --&gt;|无| F[&quot;分配到一台新机器&quot;]
+    E --&gt; G{&quot;机器 M 上有这个\n前缀的 KV Cache？&quot;}
+    G --&gt;|有| H[&quot;★ 缓存命中&lt;br&#x2F;&gt;前缀部分直接复用&lt;br&#x2F;&gt;只算后面新增的 token&quot;]
+    G --&gt;|无| I[&quot;缓存未命中&lt;br&#x2F;&gt;完整计算一遍&lt;br&#x2F;&gt;结果写入缓存&quot;]
+    F --&gt; I
+    H --&gt; J[&quot;响应中 cached_tokens &gt; 0&lt;br&#x2F;&gt;按折扣价计费&quot;]
+    I --&gt; K[&quot;响应中 cached_tokens &#x3D; 0&lt;br&#x2F;&gt;按全价计费&quot;]
+  </pre></div>
+<p>哈希路由保证相同前缀的请求落到同一台机器，在这台机器上再做缓存命中判断。如果同一前缀的请求量太大（约 &gt;15 req/min），会溢出到多台机器，命中率就会下降。</p>
+<p>你可以额外指定 <code>prompt_cache_key</code> 参数来影响路由——如果有多个不同的 prompt 但共享很长的前缀，指定相同的 key 相当于强制它们走同一条哈希路由，提高命中率。</p>
+<p>OpenAI 的方案有一个很硬的限制：前缀必须完全一致，差一个空格都不行。这是因为哈希路由只认前缀的精确匹配。所以官方文档反复强调要把静态内容（instructions、examples）放在 prompt 最前面，动态内容（user-specific info）放在最后面。结构一旦不同，前缀哈希就对不上了。</p>
+<h4 id="Anthropic：显式标记断点">Anthropic：显式标记断点</h4>
+<p>Anthropic 的设计和 OpenAI 截然不同。它不依赖&quot;前缀完全一致&quot;这个假设，而是让你在 prompt 中显式标记缓存断点（<code>cache_control</code>），然后由引擎从断点位置向前匹配。</p>
+<p>在 system prompt 上标记断点的例子：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">response = client.messages.create(</span><br><span class="line">    model=<span class="string">&quot;claude-opus-4-7&quot;</span>,</span><br><span class="line">    max_tokens=<span class="number">1024</span>,</span><br><span class="line">    system=[</span><br><span class="line">        &#123;</span><br><span class="line">            <span class="string">&quot;type&quot;</span>: <span class="string">&quot;text&quot;</span>,</span><br><span class="line">            <span class="string">&quot;text&quot;</span>: <span class="string">&quot;你是一个专业的客服助手。你需要始终保持礼貌...&quot;</span>,</span><br><span class="line">            <span class="string">&quot;cache_control&quot;</span>: &#123;<span class="string">&quot;type&quot;</span>: <span class="string">&quot;ephemeral&quot;</span>&#125;</span><br><span class="line">        &#125;</span><br><span class="line">    ],</span><br><span class="line">    messages=[&#123;<span class="string">&quot;role&quot;</span>: <span class="string">&quot;user&quot;</span>, <span class="string">&quot;content&quot;</span>: <span class="string">&quot;我的订单什么时候到？&quot;</span>&#125;]</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<p><code>cache_control</code> 断点告诉引擎：从 prompt 开头到这里的内容都可以缓存。背后的匹配机制有四个细节值得展开。</p>
+<p><strong>前缀的层级顺序</strong></p>
+<p>Anthropic 的 prompt 有一个固定的组装顺序：<code>tools → system → messages</code>。缓存也遵循这个顺序——缓存的内容是从 prompt 最开头到你标记的 <code>cache_control</code> 断点位置为止的全部内容，按这个顺序拼接。</p>
+<p>这意味着你的断点标在 system prompt 最后一行，缓存就会覆盖 tools + 整个 system prompt。如果后续请求的 tools 或 system prompt 有变化，前面缓存的哈希就对不上了。</p>
+<p><strong>缓存写入：一次请求只写一个条目</strong></p>
+<p>当你标了 <code>cache_control</code> 断点，请求完成后引擎会在缓存中写入一个条目——这个条目是&quot;从 prompt 开头到断点位置&quot;的全部内容的哈希值，以及对应的 KV 张量。</p>
+<p>每次请求只写一个缓存条目，不管你标了几个断点。如果你标了多个，引擎选最后一个可缓存的作为写入点。</p>
+<p><strong>缓存读取：20 个 block 的 lookback 窗口</strong></p>
+<p>这是 Anthropic 方案最独特的机制。新请求来了，引擎不是直接拿整个 prompt 去匹配缓存，而是从断点位置开始向前逐个 block 检查：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">def</span> <span class="title function_">find_cache_match</span>(<span class="params">prompt_blocks, breakpoint_index</span>):</span><br><span class="line">    <span class="comment"># 从断点位置开始，向前最多检查 20 个 block</span></span><br><span class="line">    <span class="keyword">for</span> offset <span class="keyword">in</span> <span class="built_in">range</span>(<span class="built_in">min</span>(<span class="number">20</span>, breakpoint_index + <span class="number">1</span>)):</span><br><span class="line">        candidate_block = breakpoint_index - offset</span><br><span class="line">        candidate_hash = hash_chain(prompt_blocks[:candidate_block + <span class="number">1</span>])</span><br><span class="line">        <span class="keyword">if</span> candidate_hash <span class="keyword">in</span> cache_store:</span><br><span class="line">            <span class="keyword">return</span> cache_store[candidate_hash]</span><br><span class="line">    <span class="comment"># 20 个 block 内都没找到匹配，全部重算</span></span><br><span class="line">    <span class="keyword">return</span> <span class="literal">None</span></span><br></pre></td></tr></table></figure>
+<p>一个 block 约 100-200 token。如果你在 prompt 的第 50 个 block 位置标了 <code>cache_control</code>，引擎会从 block 50 开始向前查 block 49、48、47……一直查到 block 30（往前 20 个为止）。哪个 block 匹配到了缓存，就从哪个 block 之后开始计算。</p>
+<p>这个 lookback 机制的好处是不要求精确的前缀匹配。比如：</p>
+<p><img src="/assets/kv-cache-post/anthropic-lookback.png" alt="Anthropic Prompt Cache 的 lookback 窗口机制"></p>
+<ul>
+<li>上一次请求的 system prompt 后面跟了&quot;发货政策查询&quot;，存在缓存里</li>
+<li>这次请求的 system prompt 后面跟了&quot;退换货政策查询&quot;，跟上次不同</li>
+<li>但 system prompt 本身没变——引擎向前 lookback，在 system prompt 的末尾 block 匹配到了上一次的缓存</li>
+<li>结果：system prompt 部分直接复用，新的&quot;退换货政策查询&quot;从零计算</li>
+</ul>
+<p><strong>多轮对话中的自动缓存</strong></p>
+<p>Anthropic 还支持另一种更省事的用法——不标具体断点，只开启自动模式：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">response = client.messages.create(</span><br><span class="line">    model=<span class="string">&quot;claude-opus-4-7&quot;</span>,</span><br><span class="line">    max_tokens=<span class="number">1024</span>,</span><br><span class="line">    cache_control=&#123;<span class="string">&quot;type&quot;</span>: <span class="string">&quot;ephemeral&quot;</span>&#125;,  <span class="comment"># 顶层开启自动缓存</span></span><br><span class="line">    system=<span class="string">&quot;你是一个专业的客服助手...&quot;</span>,</span><br><span class="line">    messages=[</span><br><span class="line">        &#123;<span class="string">&quot;role&quot;</span>: <span class="string">&quot;user&quot;</span>, <span class="string">&quot;content&quot;</span>: <span class="string">&quot;我的订单什么时候到？&quot;</span>&#125;</span><br><span class="line">    ]</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<p>自动模式下，引擎会把断点自动放在最后一个可缓存 block 的最后位置。多轮对话中，断点会随对话增长自动后移：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">轮次 1: [system] [user_1] [assistant_1] [user_2 ◀ 断点]</span><br><span class="line">         ↑ 全部写入缓存</span><br><span class="line"></span><br><span class="line">轮次 2: [system] [user_1] [assistant_1] [user_2 ◀ 命中] [assistant_2] [user_3 ◀ 新断点]</span><br><span class="line">         ↑ system ~ user_2 从缓存读取        ↑ assistant_2 + user_3 写入</span><br><span class="line"></span><br><span class="line">轮次 3: [system] ... [user_3 ◀ 命中] [assistant_3] [user_4 ◀ 新断点]</span><br><span class="line">         ↑ system ~ user_3 从缓存读取</span><br></pre></td></tr></table></figure>
+<p>因为对话历史越长，缓存的收益越大——每一轮对话前面的几十轮历史都不用重算。这也是为什么 Anthropic 的多轮对话 API 延迟不会随轮次线性增长。</p>
+<p>定价方面，Anthropic 的缓存写入和读取分开计价：写入 1.25 倍基础价格，读取 0.1 倍。缓存默认存活 5 分钟，可以加钱延长到 1 小时。写入比读取贵是技术上的合理设计——KV 张量存到 GPU 显存里本身就有成本。OpenAI 不收写入费，更多是产品层面的取舍。</p>
+<h4 id="vLLM：基于-PagedAttention-的-Prefix-Caching">vLLM：基于 PagedAttention 的 Prefix Caching</h4>
+<p>前面讲 PagedAttention 的时候提到，KV Cache 被拆成了固定大小的 block，每个 block 有独立的内存地址和内容哈希。这个设计恰好让跨请求共享变得天然可行——多个请求的公共前缀指向同一组物理 block 就行。</p>
+<p>vLLM 把这个功能叫做 Automatic Prefix Caching。关键问题是怎么快速判断两个请求的前缀一致。不能每次都比对整个 token 序列，太慢了。vLLM 的做法是用哈希链：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">def</span> <span class="title function_">hash_block_tokens</span>(<span class="params">parent_block_hash, curr_block_token_ids, extra_keys</span>):</span><br><span class="line">    <span class="keyword">if</span> <span class="keyword">not</span> parent_block_hash:</span><br><span class="line">        parent_block_hash = NONE_HASH</span><br><span class="line">    <span class="keyword">return</span> sha256((parent_block_hash, <span class="built_in">tuple</span>(curr_block_token_ids), extra_keys))</span><br></pre></td></tr></table></figure>
+<p>每个 block 的哈希由两部分决定：父 block 的哈希 + 当前 block 的 16 个 token ID。形成链式结构：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">hash(block_0) = sha256(NONE_HASH, tokens[0:16])</span><br><span class="line">hash(block_1) = sha256(hash(block_0), tokens[16:32])</span><br><span class="line">hash(block_2) = sha256(hash(block_1), tokens[32:48])</span><br></pre></td></tr></table></figure>
+<p>新请求进来时，从第一个 block 开始沿着哈希链逐块匹配。每一步都是 O(1) 的哈希表查找——查到某一步哈希对不上，说明从这个 block 开始是新的内容，从这里开始自己算。匹配到的 block 引用计数加一（<code>ref_cnt++</code>），算完或请求结束后减一，归零才释放物理显存。</p>
+<p>这套机制对比 OpenAI 的方案有两个优势：支持任意长度的前缀匹配（不限于 256 token），同一组物理 block 可以被任意多个请求共享，零拷贝。代价也很直白——你得自己在本地部署推理引擎，不像 API 那样开箱即用。</p>
+<h2 id="三、区别">三、区别</h2>
+<p>KV Cache 和 Prompt Cache 不是一个层面的东西。</p>
+<p>KV Cache 是 Attention 自回归推理的底层机制，管的是&quot;同一次请求内部，历史 token 的 K/V 不要重复算&quot;。这是 Transformer 推理的标配，从 GPT-2 时代开始就有。你只要跑自回归生成，就一定在用 KV Cache。</p>
+<p>Prompt Cache 建立在 KV Cache 之上，管的是&quot;多个请求之间，公共前缀的 K/V 不要重复算&quot;。它复用的就是普通的 KV Cache 张量，只是把生命周期从一次请求拉长到了跨请求，顺带加上了前缀匹配和缓存淘汰。</p>
+<p>几点差异：</p>
+<ul>
+<li>KV Cache 跟着一次请求走，请求结束就释放；Prompt Cache 由框架或 API 服务管着，可能存活几分钟到几小时</li>
+<li>KV Cache 省的是序列内部逐 token 生成时的重复计算；Prompt Cache 省的是不同请求共享公共前缀时的重复计算</li>
+<li>Prompt Cache 不是免费的。KV 张量趴在 GPU 显存里本身就是成本，缓存太多而命中率不够，反而挤了服务更多请求的空间。所以不管是 vLLM 的引用计数淘汰还是 API 的 TTL 过期，都是在显存和命中率之间做取舍</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/05/28/KV-Cache%E5%92%8CPrompt-Cache%E7%9A%84%E5%8C%BA%E5%88%AB/">https://wrygill.github.io/2026/05/28/KV-Cache%E5%92%8CPrompt-Cache%E7%9A%84%E5%8C%BA%E5%88%AB/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86%E4%BC%98%E5%8C%96/">推理优化</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_1.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/05/29/Optimizer-%E4%BB%8ESGD%E5%88%B0AdamW/" title="Optimizer：从 SGD 到 AdamW"><img class="cover" src="/img/miku_cover_2.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Optimizer：从 SGD 到 AdamW</div></div><div class="info-2"><div class="info-item-1">Optimizer：从 SGD 到 AdamW 训练神经网络就是在找一个最低点。你站在 loss 曲面的某个位置，每步沿着梯度方向往下走一点，希望最后走到谷底。 SGD 做的就是这件事： 1234for x, y in dataloader:    loss = model(x, y)      # 前向：算出当前位置的 loss    loss.backward()          # 反向：算出梯度 g_t    optimizer.step()         # 更新：θ = θ - lr * g_t 听起来简单。但真正跑起来，你会发现 loss 降着降着不动了——不是到了最低点，梯度还不是零，参数也还在更新，但 loss 就是不降。 问题出在哪？梯度告诉你的是&quot;当前脚下最陡的下坡方向&quot;。但如果这座山的形状是一个又窄又长的峡谷呢？最陡的方向指向峡谷的侧壁，而不是谷底。你每一步都往侧壁走，走到对面再弹回来——来来回回，沿谷底的有效位移极小。 这就是 SGD 的第一个问题：梯度方向和真正该去的方向之间有夹角。   一、Momentum：让方向靠谱一点 M...</div></div></div></a><a class="pagination-related" href="/2025/11/18/%E6%8B%9B%E6%96%B0%E5%B9%B3%E5%8F%B0%E6%98%AF%E5%A6%82%E4%BD%95%E8%A7%A3%E5%86%B3%E9%AB%98%E5%B9%B6%E5%8F%91%E5%88%A4%E9%A2%98%E9%97%AE%E9%A2%98%E7%9A%84%EF%BC%9F/" title="招新平台是如何解决高并发判题问题的？"><img class="cover" src="/img/miku_cover_3.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">招新平台是如何解决高并发判题问题的？</div></div><div class="info-2"><div class="info-item-1">招新平台是如何解决高并发判题问题的？ 在设计一个招新平台答题系统时，有一个典型需求：  同一道题提交人数越多，得分越低（衰减计分）。同时要保证高并发下的分数正确性。  一、业务场景 &amp; 技术挑战 典型需求 包括：  用户高并发提交题解 只有 首次正确提交 才计入计数 答题人数越多，分数越低（例如对数衰减） 分数必须计算准确，不能出现并发错误 衰减后的分数必须可靠写入数据库 系统需要具备足够的高并发吞吐能力  二、整体实现思路 用户提交答案     ↓ 后端校验答案是否正确     ↓ Redis Lua（原子）：     SETNX 判断是否首次正确提交     INCR 计数 	返回计数     ↓ Java 计算衰减得分     ↓ MySQL 落库：     - 用户得分（幂等写）     - 题目统计（乐观锁 + 重试）  三、Redis的Lua脚本实现计数原子性 -- KEYS[1] = 用户是否答对标记 key -- KEYS[2] = 题目提交人数计数 key  -- 防重复：首次答对才能进入计分逻辑 local firstSolved = redis.ca...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">vLLM 推理计算图</div></div><div class="info-2"><div class="info-item-1"> 同一个 Transformer 模型，连续两轮 Decode 执行的层结构几乎完全一致。第一轮可能有 32 条序列参与计算，下一轮只剩 27 条，同时又有一段新 Prompt 等待 Prefill。模型权重没有改变，参与计算的 Token、KV Cache 位置和 Attention 元数据却全部发生了变化。 这正是 LLM 推理计算图面对的基本矛盾：模型结构相对稳定，在线负载持续变化。  直接调用 PyTorch 模型时，一次前向可以简化为输入 Tensor 经过若干算子后产生 Logits。推理框架面对的工作更多：它要持续接收请求、组织批次、分配 KV Cache、执行模型、采样 Token，再把未完成的序列送入下一轮调度。即使模型层没有变化，每轮前向的输入形状和运行时状态也可能不同。 计算图提供了一种处理这种矛盾的方式。框架先把模型前向表示成可分析的图，在其中识别稳定结构、改写算子并生成 Kernel；随后从 GPU 执行序列中选择适合捕获的部分，用 CUDA Graph 降低重复提交的成本。调度器仍然保留动态决策能力，并在每轮执行前准备新的输入与元数据。 理解 vLLM...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1"> 一个 Llama 2 7B 模型，FP16 权重 13GB。把它装进 A100 40GB，看上去绰绰有余。batch size 拉到 8，上下文设 4096，跑两步 OOM 了。13GB 的模型在 40GB 的卡上怎么会爆？ 原因是显存的主体不止权重。KV Cache 随请求数和上下文长度线性增长，注意力中间结果随序列长度平方膨胀，框架的 workspace、通信 buffer 还要再吃一块。三块加起来，部署前不算清楚，运维线上就要在 dashboard 里看 OOM 告警。 这篇文章回答一个具体问题：给定模型、上下文长度和并发请求数，一张卡到底会占多少显存。  一、权重的显存 最直觉的部分。模型的参数量 NNN 是一个固定数字，权重显存等于参数量乘以每个参数占的字节数： WeightMem=N×bytes/param\text{WeightMem} = N \times \text{bytes/param}WeightMem=N×bytes/paramLlama 2 7B 标称 7B，实际参数量约 6.7B（含 embedding 与每一层的 attention/FFN 矩阵...</div></div></div></a><a class="pagination-related" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</div></div><div class="info-2"><div class="info-item-1"> 一台 A100 提供 40 GB 显存，跑 OPT 13B 模型（FP16 权重 26 GB），剩余 14 GB 全部给 KV cache。按现有框架的默认做法，每个请求按 max sequence length 2048 预留连续内存，单请求 1.6 GB，14 GB 同时容纳 8 路并发；但这 8 路里平均输出只有 200 token，实际占用的内存不到 160 MB，其余 1.44 GB 全程空着等分配上限到来。 同一份带固定 system prompt 的多轮对话负载分别在 vLLM 和 SGLang 上跑，第一个 token 延迟差 10–20%。差距不出在模型权重，也不出在 GPU 型号，而出在缓存 KV 时背后用的数据结构。  这篇文章讲两件事：vLLM 的 PagedAttention 怎么把 KV cache 从&quot;一段连续显存&quot;改造成&quot;按块非连续存放&quot;，SGLang 的 RadixAttention 又怎么在块状 KV 之上把&quot;跨请求自动复用&quot;做成了树形索引。两者经常被并列提起，但它们处在栈的不同层—...</div></div></div></a><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-25</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1"> 同一个 70B 模型，Prefill 可以把几千个 token 的 Prompt 一次吃进 GPU，Decode 却只能一个 token 一个 token 往前走。 权重没有变化，慢的是生成方式本身：每推进 1 个 token，140GB 权重就要从显存里完整读一遍。 投机解码（Speculative Decoding，SD）先用廉价草稿多猜几步，再让大模型一次验证。MTP（Multi-Token Prediction）继续往前走，把多 token 预测写进训练目标，让草稿能力从外挂变成模型原生接口。  一、串行 Decode Decode 慢的根源不在算力，在访存。 每生成一个 token，模型要把全部权重从 HBM 读进计算单元。batch=1 时，一次 forward 的算术强度约为 2N2N2N FLOPs 对应 2N2N2N 字节访存，即 ∼1\sim 1∼1 FLOP/byte。H100 的 ridge point 在 ∼300\sim 300∼300 FLOP/byte 量级，decode 离它有近三百倍差距。计算单元大量空转，延迟下限由显存带宽直接决定：    ...</div></div></div></a><a class="pagination-related" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">MoE 动态路由与稀疏计算</div></div><div class="info-2"><div class="info-item-1"> DeepSeek-V3 包含 671B 参数，每个 Token 实际激活 37B。单看前向计算，它更接近一个 37B 模型；单看权重存储，它仍然要为 671B 参数寻找位置。 少算的参数没有消失。它们以专家权重的形式分布在设备上，等待 Router 选择。被选中的专家若位于其他 GPU，Token 还要先离开当前设备，完成跨卡传输后才能进入 FFN。 MoE 解耦了模型容量与单 Token 计算量，也把一部分矩阵计算问题转化成了路由、负载和通信问题。  Dense Transformer 扩大模型时，参数量与前向计算量通常同步增长。MoE（Mixture of Experts）在 FFN 中引入条件计算，让模型保留大量专家参数，同时只为每个 Token 激活少数专家。按 DeepSeek-V3 公布的数据计算，单 Token 激活的参数约占总参数的 5.5%。 这个比例说明了 MoE 如何控制前向计算，却无法单独解释显存占用、吞吐和延迟。要理解两类成本为何出现分歧，需要先看它对 Transformer Block 做了什么改动。 一、参数与计算解耦 Transformer Bl...</div></div></div></a><a class="pagination-related" href="/2026/06/14/llm-alignment/" title="LLM 的训练与对齐"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-15</div><div class="info-item-2">LLM 的训练与对齐</div></div><div class="info-2"><div class="info-item-1"> 你做了一个客服机器人。用户问：“我的订单什么时候到？” 预训练模型的回答是：“我的订单什么时候到？这是一个常见的问题。订单的到达时间取决于多个因素，包括发货地、目的地、物流公司…” 用户要的是一个具体的日期，不是一篇物流科普文章。  这是每个做 LLM 应用的人都会遇到的问题：预训练模型会写文章，但不会回答问题。 你可能觉得这是 prompt 的问题，试了各种 prompt engineering 技巧，发现效果有限。根本原因不在 prompt，而在模型本身——它没有学过&quot;什么是好的回答&quot;。 本篇讲的就是如何让模型从&quot;会写&quot;变成&quot;会答&quot;。  一、预训练模型为什么不会回答问题 预训练的目标是预测下一个 token。这个目标让模型学会了语言的统计规律，但没有教它什么是&quot;好的回答&quot;。 你问它&quot;我的订单什么时候到&quot;，它会续写&quot;我的订单什么时候到？这是一个常见的问题…&quot;——因为它在训练数据里见过最多的就是这种&quot;百科全书式&quot;的写法。 问题出在损失函数：...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">29</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">34</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">KV Cache 和 Prompt Cache 的区别</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81KV-Cache"><span class="toc-number">1.1.</span> <span class="toc-text">一、KV Cache</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%8D%E5%8F%98%E7%9A%84-K-%E5%92%8C-V"><span class="toc-number">1.1.0.1.</span> <span class="toc-text">不变的 K 和 V</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.1.0.2.</span> <span class="toc-text">代码实现</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%BE%E5%AD%98%E5%BC%80%E9%94%80"><span class="toc-number">1.1.0.3.</span> <span class="toc-text">显存开销</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#PagedAttention%EF%BC%9A%E8%A7%A3%E5%86%B3-KV-Cache-%E7%9A%84%E6%98%BE%E5%AD%98%E7%A2%8E%E7%89%87"><span class="toc-number">1.1.0.4.</span> <span class="toc-text">PagedAttention：解决 KV Cache 的显存碎片</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Prompt-Cache"><span class="toc-number">1.2.</span> <span class="toc-text">二、Prompt Cache</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#OpenAI%EF%BC%9A%E8%87%AA%E5%8A%A8%E5%93%88%E5%B8%8C%E8%B7%AF%E7%94%B1"><span class="toc-number">1.2.0.1.</span> <span class="toc-text">OpenAI：自动哈希路由</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Anthropic%EF%BC%9A%E6%98%BE%E5%BC%8F%E6%A0%87%E8%AE%B0%E6%96%AD%E7%82%B9"><span class="toc-number">1.2.0.2.</span> <span class="toc-text">Anthropic：显式标记断点</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#vLLM%EF%BC%9A%E5%9F%BA%E4%BA%8E-PagedAttention-%E7%9A%84-Prefix-Caching"><span class="toc-number">1.2.0.3.</span> <span class="toc-text">vLLM：基于 PagedAttention 的 Prefix Caching</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%8C%BA%E5%88%AB"><span class="toc-number">1.3.</span> <span class="toc-text">三、区别</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="vLLM 推理计算图"/></a><div class="content"><a class="title" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图">vLLM 推理计算图</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

@@ -1,0 +1,601 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>谈谈分布式ID生成器 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="谈谈分布式ID生成器  在后端开发中，唯一 ID 是一个基础而关键的需求。无论是用户注册时生成的用户 ID、下单时的订单号，还是日志系统中的 TraceId，唯一 ID 都承担着 数据唯一标识 的核心作用。 在单体应用时代，很多系统直接依赖数据库的自增主键来生成 ID，这种方式简单易用，能够满足小规模系统的需求。但随着系统规模不断扩大，传统自增ID逐渐暴露出数据泄露风险、分库分表困难、性能瓶颈等严">
+<meta property="og:type" content="article">
+<meta property="og:title" content="谈谈分布式ID生成器">
+<meta property="og:url" content="https://wrygill.github.io/2025/10/03/%E8%B0%88%E8%B0%88%E5%88%86%E5%B8%83%E5%BC%8FID%E7%94%9F%E6%88%90%E5%99%A8/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="谈谈分布式ID生成器  在后端开发中，唯一 ID 是一个基础而关键的需求。无论是用户注册时生成的用户 ID、下单时的订单号，还是日志系统中的 TraceId，唯一 ID 都承担着 数据唯一标识 的核心作用。 在单体应用时代，很多系统直接依赖数据库的自增主键来生成 ID，这种方式简单易用，能够满足小规模系统的需求。但随着系统规模不断扩大，传统自增ID逐渐暴露出数据泄露风险、分库分表困难、性能瓶颈等严">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_1.jpg">
+<meta property="article:published_time" content="2025-10-03T00:21:01.000Z">
+<meta property="article:modified_time" content="2026-08-22T14:22:57.903Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="分布式">
+<meta property="article:tag" content="后端开发">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_1.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "谈谈分布式ID生成器",
+  "url": "https://wrygill.github.io/2025/10/03/%E8%B0%88%E8%B0%88%E5%88%86%E5%B8%83%E5%BC%8FID%E7%94%9F%E6%88%90%E5%99%A8/",
+  "image": "https://wrygill.github.io/img/miku_cover_1.jpg",
+  "datePublished": "2025-10-03T00:21:01.000Z",
+  "dateModified": "2026-08-22T14:22:57.903Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2025/10/03/%E8%B0%88%E8%B0%88%E5%88%86%E5%B8%83%E5%BC%8FID%E7%94%9F%E6%88%90%E5%99%A8/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '谈谈分布式ID生成器',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_1.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">谈谈分布式ID生成器</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">谈谈分布式ID生成器</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T00:21:01.000Z" title="发表于 2025-10-03 08:21:01">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-22T14:22:57.903Z" title="更新于 2026-08-22 22:22:57">2026-08-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%90%8E%E7%AB%AF%E5%AE%9E%E6%88%98/">后端实战</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>谈谈分布式ID生成器</h1>
+<blockquote>
+<p>在后端开发中，<strong>唯一 ID</strong> 是一个基础而关键的需求。无论是用户注册时生成的用户 ID、下单时的订单号，还是日志系统中的 TraceId，唯一 ID 都承担着 <strong>数据唯一标识</strong> 的核心作用。<br>
+在单体应用时代，很多系统直接依赖数据库的自增主键来生成 ID，这种方式简单易用，能够满足小规模系统的需求。但随着系统规模不断扩大，传统自增ID逐渐暴露出数据泄露风险、分库分表困难、性能瓶颈等严重问题，促使我们寻找更适合分布式环境的ID生成方案。</p>
+</blockquote>
+<h2 id="常见分布式唯一-ID-方案">常见分布式唯一 ID 方案</h2>
+<h3 id="一、自增ID">一、自增ID</h3>
+<p>利用数据库的 <code>AUTO_INCREMENT</code> 实现，这是最直观的ID生成方式，也是初学者的首选方案。</p>
+<pre><code>CREATE TABLE user (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(50) NOT NULL
+);
+</code></pre>
+<p><strong>优点</strong> ：实现简单，性能良好，ID具有递增特性，适合作为数据库主键。<br>
+<strong>缺点</strong> ：</p>
+<ul>
+<li><strong>安全风险</strong> ：自增ID具有明显的规律性，容易被恶意用户通过枚举方式获取敏感数据，存在严重的数据泄露风险</li>
+<li><strong>分库分表困难</strong> ：在分布式环境下，多个数据库实例的自增ID可能发生冲突，需要引入复杂的分配策略（如库号 + 表号拼接）</li>
+<li><strong>扩展性限制</strong> ：单点依赖数据库，无法满足高并发场景下的ID生成需求</li>
+</ul>
+<h3 id="二、UUID">二、UUID</h3>
+<p>UUID（Universally Unique Identifier）是一种标准化的128位标识符，通过Java官方的 <code>java.util.UUID.randomUUID()</code> 方法可以轻松生成全局唯一的ID。</p>
+<pre><code>import java.util.UUID;
+
+public class UUIDExample &#123;
+    public static void main(String[] args) &#123;
+        String id = UUID.randomUUID().toString();
+        System.out.println(id); // 输出类似：550e8400-e29b-41d4-a716-446655440000
+    &#125;
+&#125;
+</code></pre>
+<p><strong>优点</strong> ：</p>
+<ul>
+<li><strong>全局唯一性</strong> ：基于时间戳、随机数和MAC地址生成，理论上保证全局唯一</li>
+<li><strong>安全性</strong> ：无序特性使其难以被枚举攻击</li>
+<li><strong>无中心化</strong> ：无需依赖外部服务，本地即可生成</li>
+</ul>
+<p><strong>缺点</strong> ：</p>
+<ul>
+<li><strong>存储开销</strong> ：长度较长（36个字符），占用更多存储空间</li>
+<li><strong>索引性能</strong> ：无序特性导致B+树索引频繁分裂，严重影响数据库写入和查询性能</li>
+<li><strong>业务适用性</strong> ：不具备时间递增性，不适合需要按时间排序的业务场景</li>
+</ul>
+<h3 id="三、雪花ID（Snowflake）">三、雪花ID（Snowflake）</h3>
+<p>主要组成：<img src="https://developer.qcloudimg.com/http-save/yehe-admin/9cb4750151604d14c591dbed03a076ba.png" alt="img"></p>
+<ul>
+<li><strong>固定值</strong> ：符号位</li>
+<li><strong>时间戳</strong> ：调用时间戳(ms)减去程序设计时间戳的差值</li>
+<li><strong>机器id</strong> 、服务id：区别不同的生成机器</li>
+<li><strong>序号</strong> ：同一毫秒的自增位数</li>
+</ul>
+<p>雪花Id基本能应付大多数业务开发场景，能够保证：<br>
+<strong>优点</strong> ：</p>
+<ul>
+<li><strong>高性能</strong> ：本地生成，无网络开销，单机QPS可达百万级别</li>
+<li><strong>趋势递增</strong> ：时间戳在前，保证ID整体递增，适合数据库主键</li>
+<li><strong>分布式友好</strong> ：通过机器ID保证不同节点生成的ID唯一性</li>
+<li><strong>存储高效</strong> ：64位长整型，存储空间占用小</li>
+</ul>
+<p><strong>缺点</strong> ：</p>
+<ul>
+<li><strong>时钟依赖</strong> ：严重依赖系统时钟，时钟回拨可能导致ID重复</li>
+<li><strong>机器ID管理</strong> ：需要为每台机器分配唯一的机器ID，增加运维复杂度</li>
+</ul>
+<h2 id="方案对比">方案对比</h2>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>性能</th>
+<th>唯一性</th>
+<th>有序性</th>
+<th>存储开销</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自增ID</td>
+<td>高</td>
+<td>单库唯一</td>
+<td>严格递增</td>
+<td>小</td>
+<td>小规模单体应用</td>
+</tr>
+<tr>
+<td>UUID</td>
+<td>中</td>
+<td>全局唯一</td>
+<td>无序</td>
+<td>大</td>
+<td>对性能要求不高的场景</td>
+</tr>
+<tr>
+<td>雪花ID</td>
+<td>极高</td>
+<td>分布式唯一</td>
+<td>趋势递增</td>
+<td>小</td>
+<td>大规模分布式系统</td>
+</tr>
+</tbody>
+</table>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2025/10/03/%E8%B0%88%E8%B0%88%E5%88%86%E5%B8%83%E5%BC%8FID%E7%94%9F%E6%88%90%E5%99%A8/">https://wrygill.github.io/2025/10/03/%E8%B0%88%E8%B0%88%E5%88%86%E5%B8%83%E5%BC%8FID%E7%94%9F%E6%88%90%E5%99%A8/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式</a><a class="post-meta__tags" href="/tags/%E5%90%8E%E7%AB%AF%E5%BC%80%E5%8F%91/">后端开发</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_1.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2025/10/06/%E6%8E%A5%E5%8F%A3%E9%99%90%E6%B5%81Part%201%EF%BC%9A%E5%9B%BA%E5%AE%9A%E7%AA%97%E5%8F%A3/" title="接口限流Part 1：固定窗口"><img class="cover" src="/img/miku_cover_2.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">接口限流Part 1：固定窗口</div></div><div class="info-2"><div class="info-item-1">接口限流Part 1：固定窗口  在微服务架构中，接口限流是保障系统稳定性的重要手段。当某个接口突然收到大量请求时，如果没有限流保护，可能导致数据库连接池耗尽、内存溢出，甚至整个服务崩溃。 **接口限流（Rate Limiting）**的核心目标很明确：控制每个用户或IP的请求频率，防止恶意攻击和异常流量对系统造成冲击。  一、固定窗口限流原理 固定窗口算法的核心思想很简单：将时间划分为固定长度的窗口，在每个窗口内统计请求次数，超过阈值就拒绝服务 。 工作原理  时间窗口：比如设置1分钟为一个窗口 计数规则：每个窗口内，同一IP对同一接口的请求次数不能超过设定值 重置机制：新窗口开始时，计数器清零重新计数  具体示例 假设限制为每分钟10次请求：  10:00-10:01窗口：用户请求8次 → 允许 10:01-10:02窗口：用户请求5次 → 允许（新窗口重新计数） 10:00-10:01窗口：用户请求12次 → 第11次开始返回429错误  技术实现 ：  使用Redis存储计数器 Key格式：rate_limit:IP:接口路径 通过EXPIRE实现窗口重置  二、Redi...</div></div></div></a><a class="pagination-related" href="/2025/09/29/HashSet%E5%BA%95%E5%B1%82%E5%88%9D%E6%8E%A2/" title="HashSet底层初探"><img class="cover" src="/img/miku_cover_3.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">HashSet底层初探</div></div><div class="info-2"><div class="info-item-1">HashSet底层初探 HashSet是Java集合框架中一个重要的实现类，它基于HashMap实现，具有不允许重复元素 、允许null值 、无序存储 等特性。作为最常用的Set实现，HashSet在去重、快速查找等场景中发挥着重要作用。 核心数据结构 HashSet的内部实现采用了适配器模式 ，通过组合HashMap来实现Set接口的功能。 private transient HashMap&lt;E,Object&gt; map;  // Dummy value to associate with an Object in the backing Map private static final Object PRESENT = new Object();  关键设计要点 ：  map属性 ：HashSet内部维护一个HashMap实例，所有Set操作都委托给这个HashMap处理 PRESENT常量 ：作为HashMap的value值，由于Set只需要存储key，所以使用一个固定的Object对象作为占位符 transient关键字 ：map字段被标记为transient，...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/10/10/%E6%8E%A5%E5%8F%A3%E9%99%90%E6%B5%81Part%203%EF%BC%9A%E4%BB%A4%E7%89%8C%E6%A1%B6%E7%AE%97%E6%B3%95/" title="接口限流Part 3：令牌桶算法"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-10</div><div class="info-item-2">接口限流Part 3：令牌桶算法</div></div><div class="info-2"><div class="info-item-1">接口限流Part 3：令牌桶算法  本文基于开源项目api-rate-limiter编写  一、令牌桶算法原理 令牌桶算法是限流算法中最灵活的一种，它的核心思想是： 系统以固定速率生成令牌放入桶中，每次请求需要消耗令牌才能通过，桶满时不再添加令牌。 工作原理  令牌生成 ：系统按照固定速率（如每秒10个）向桶中添加令牌 容量限制 ：桶有最大容量，超过容量的令牌会被丢弃 令牌消费 ：每次请求消耗一个或多个令牌 流量控制 ：桶空时拒绝请求，桶满时允许突发流量  核心优势  突发流量支持 ：桶满时可以处理短时间的大量请求 平均速率控制 ：长期来看，请求速率不会超过令牌生成速率 灵活性高 ：可以根据业务需求调整令牌生成速率和桶容量  实际场景举例 假设设置：桶容量100个，生成速率10个/秒  正常情况：每秒最多处理10个请求 突发情况：可以瞬间处理100个请求，然后需要10秒恢复 长期效果：平均每秒不超过10个请求  二、Redis + Lua 实现方案 令牌桶算法需要维护每个用户的桶状态，包括当前令牌数和最后更新时间。这里采用Redis Hash + Lua脚本 的方案：  Hash...</div></div></div></a><a class="pagination-related" href="/2025/10/06/%E6%8E%A5%E5%8F%A3%E9%99%90%E6%B5%81Part%201%EF%BC%9A%E5%9B%BA%E5%AE%9A%E7%AA%97%E5%8F%A3/" title="接口限流Part 1：固定窗口"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">接口限流Part 1：固定窗口</div></div><div class="info-2"><div class="info-item-1">接口限流Part 1：固定窗口  在微服务架构中，接口限流是保障系统稳定性的重要手段。当某个接口突然收到大量请求时，如果没有限流保护，可能导致数据库连接池耗尽、内存溢出，甚至整个服务崩溃。 **接口限流（Rate Limiting）**的核心目标很明确：控制每个用户或IP的请求频率，防止恶意攻击和异常流量对系统造成冲击。  一、固定窗口限流原理 固定窗口算法的核心思想很简单：将时间划分为固定长度的窗口，在每个窗口内统计请求次数，超过阈值就拒绝服务 。 工作原理  时间窗口：比如设置1分钟为一个窗口 计数规则：每个窗口内，同一IP对同一接口的请求次数不能超过设定值 重置机制：新窗口开始时，计数器清零重新计数  具体示例 假设限制为每分钟10次请求：  10:00-10:01窗口：用户请求8次 → 允许 10:01-10:02窗口：用户请求5次 → 允许（新窗口重新计数） 10:00-10:01窗口：用户请求12次 → 第11次开始返回429错误  技术实现 ：  使用Redis存储计数器 Key格式：rate_limit:IP:接口路径 通过EXPIRE实现窗口重置  二、Redi...</div></div></div></a><a class="pagination-related" href="/2025/10/08/%E6%8E%A5%E5%8F%A3%E9%99%90%E6%B5%81Part%202%EF%BC%9A%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3/" title="接口限流Part 2：滑动窗口"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-09</div><div class="info-item-2">接口限流Part 2：滑动窗口</div></div><div class="info-2"><div class="info-item-1">接口限流Part 2：滑动窗口  在上一篇文章中，我们了解了固定窗口限流的基本原理和实现方式。虽然固定窗口实现简单，但在实际应用中存在一个致命问题：边界突刺 。  一、固定窗口的边界突刺问题 固定窗口算法虽然简单有效，但在窗口边界处存在明显的流量突刺问题： 时间轴：|----窗口1----|----窗口2----| 请求：   10:00:59    10:01:00 结果：   第20次      第1次（新窗口） 问题：   在边界时刻可能出现2倍阈值的突发流量  具体场景 ：  设置限制：每分钟20次请求 用户在10:00:59发送20次请求（窗口1的最后时刻） 用户在10:01:00又发送20次请求（窗口2的开始时刻） 结果：1秒内实际处理了40次请求，远超预期限制  这就是为什么我们需要滑动窗口 算法来解决这个问题。 二、滑动窗窗口实现原理 滑动窗口算法的核心思想是：统计任意时刻向前推N秒内的请求总数，而不是固定时间块的请求数 。 工作原理 滑动窗口通过以下方式实现平滑限流：  动态时间窗口 ：每次请求时，都计算”当前时间向前推N秒”这个时间窗口内的请求总数 实时清理 ...</div></div></div></a><a class="pagination-related" href="/2025/11/18/%E6%8B%9B%E6%96%B0%E5%B9%B3%E5%8F%B0%E6%98%AF%E5%A6%82%E4%BD%95%E8%A7%A3%E5%86%B3%E9%AB%98%E5%B9%B6%E5%8F%91%E5%88%A4%E9%A2%98%E9%97%AE%E9%A2%98%E7%9A%84%EF%BC%9F/" title="招新平台是如何解决高并发判题问题的？"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-18</div><div class="info-item-2">招新平台是如何解决高并发判题问题的？</div></div><div class="info-2"><div class="info-item-1">招新平台是如何解决高并发判题问题的？ 在设计一个招新平台答题系统时，有一个典型需求：  同一道题提交人数越多，得分越低（衰减计分）。同时要保证高并发下的分数正确性。  一、业务场景 &amp; 技术挑战 典型需求 包括：  用户高并发提交题解 只有 首次正确提交 才计入计数 答题人数越多，分数越低（例如对数衰减） 分数必须计算准确，不能出现并发错误 衰减后的分数必须可靠写入数据库 系统需要具备足够的高并发吞吐能力  二、整体实现思路 用户提交答案     ↓ 后端校验答案是否正确     ↓ Redis Lua（原子）：     SETNX 判断是否首次正确提交     INCR 计数 	返回计数     ↓ Java 计算衰减得分     ↓ MySQL 落库：     - 用户得分（幂等写）     - 题目统计（乐观锁 + 重试）  三、Redis的Lua脚本实现计数原子性 -- KEYS[1] = 用户是否答对标记 key -- KEYS[2] = 题目提交人数计数 key  -- 防重复：首次答对才能进入计分逻辑 local firstSolved = redis.ca...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">29</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">34</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">谈谈分布式ID生成器</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B8%B8%E8%A7%81%E5%88%86%E5%B8%83%E5%BC%8F%E5%94%AF%E4%B8%80-ID-%E6%96%B9%E6%A1%88"><span class="toc-number">1.1.</span> <span class="toc-text">常见分布式唯一 ID 方案</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%87%AA%E5%A2%9EID"><span class="toc-number">1.1.1.</span> <span class="toc-text">一、自增ID</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BA%8C%E3%80%81UUID"><span class="toc-number">1.1.2.</span> <span class="toc-text">二、UUID</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E9%9B%AA%E8%8A%B1ID%EF%BC%88Snowflake%EF%BC%89"><span class="toc-number">1.1.3.</span> <span class="toc-text">三、雪花ID（Snowflake）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E5%AF%B9%E6%AF%94"><span class="toc-number">1.2.</span> <span class="toc-text">方案对比</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="vLLM 推理计算图"/></a><div class="content"><a class="title" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图">vLLM 推理计算图</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>
