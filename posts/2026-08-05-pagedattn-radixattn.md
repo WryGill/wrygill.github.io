@@ -16,9 +16,9 @@ katex: true
 
 要理解 PagedAttention 解决了什么，先看清旧的连续分配到底浪费在哪。KV cache 的体积由架构参数和序列长度决定，对单 token 有
 
-$$\text{KVMem}_{\text{token}} = 2 \cdot n_{\text{layer}} \cdot n_{\text{kv_head}} \cdot d_{\text{head}} \cdot b_{\text{kv}}$$
+$$\text{KVMem}_{\text{token}} = 2 \cdot n_{\text{layer}} \cdot n_{\text{kv\_head}} \cdot d_{\text{head}} \cdot b_{\text{kv}}$$
 
-OPT 13B 用传统 MHA，$n_{\text{kv_head}} = 40$，$d_{\text{head}} = 128$，$n_{\text{layer}} = 40$，FP16 时 $b_{\text{kv}} = 2$，单 token 约 $800\text{KB}$，与原文一致。模型允许的最大序列长度 2048，按最大值连续预留就是 $1.6\text{GB}$。
+OPT 13B 用传统 MHA，$n_{\text{kv\_head}} = 40$，$d_{\text{head}} = 128$，$n_{\text{layer}} = 40$，FP16 时 $b_{\text{kv}} = 2$，单 token 约 $800\text{KB}$，与原文一致。模型允许的最大序列长度 2048，按最大值连续预留就是 $1.6\text{GB}$。
 
 旧框架约束 KV cache 必须连续存放，是因为底层 Tensor 库要求 Tensor 在物理内存里连续。这个约束继承了传统深度学习负载的特征——固定 shape、生命周期与单次前向一致。KV cache 不一样：它的长度随 decode 增长、输出长度事先未知、生命周期跨越多次前向。把 KV cache 塞进"为定长张量设计"的连续容器里，必然要用预留最大长度的方式兜底。
 
@@ -74,7 +74,7 @@ $B$ 的取值是工程取舍。$B$ 太小，kernel 在单次 attention 内能并
 
 每个物理块用 **它自己的 token + 它前面所有 prefix token** 一起做哈希，得到一个唯一 key：
 
-$$h_j = \text{hash}(\text{prefix_tokens}(j) \,\|\, \text{block_tokens}(j))$$
+$$h_j = \text{hash}(\text{prefix\_tokens}(j) \,\|\, \text{block\_tokens}(j))$$
 
 全局维护一张 $h_j \to \text{physical block}$ 的表。新请求进调度时按 B 切块逐块算哈希、查表，命中即把这个 logical block 指向已有物理块、引用计数加一，跳过该块的 prefill；未命中的部分照常计算并写入新物理块、把哈希登记进表。命中粒度精确到满块，最后一个未满块不缓存。
 
