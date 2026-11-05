@@ -6,11 +6,9 @@ categories: [AI Infrastructure]
 katex: true
 ---
 
-> 第一篇结束时，每个 token 是一个 $d$ 维向量。"cat" 和 "dog" 在语义空间里距离很近，但它们各自的向量是独立的——token $i$ 不知道序列里还有 token $j$。
->
-> "The animal didn't cross the street because it was too tired." 模型处理到 "it" 时，怎么知道 "it" 指的是 "animal" 而不是 "street"？
->
-> Transformer 要解决的只有一件事：让每个 token 的最终表示融合整个序列的上下文。
+Embedding 查表为每个 token 提供初始向量，但同一个 token 在不同句子里仍会取到同一行参数。Transformer 通过 Attention 聚合上下文，再用前馈网络做非线性变换，形成与当前语境相关的表示。
+
+本文先展开单层计算，再讨论多头结构、KV Cache 与 FlashAttention。示例以因果语言模型为主，每个位置只能访问自身及此前的 token。
 
 ---
 
@@ -37,7 +35,7 @@ $$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)
 - $\text{softmax}$：将分数归一化为概率分布，每行和为 1。
 - 乘以 $V$：按注意力权重加权聚合 value 向量。注意力高的 token 的 $V$ 在输出中占更大比重。
 
-用 "The animal didn't cross the street" 走一遍。序列长度 $N=5$，简化维度 $d=8$：
+下面用随机生成的 5 个位置展示张量运算，$N=5$、$d=8$。这不是对某个英文句子的真实分词或训练后注意力可视化：
 
 ```python
 import torch
@@ -65,22 +63,11 @@ print(f"注意力权重矩阵 shape: {list(attn_weights.shape)}")
 print(attn_weights.round(decimals=3))
 ```
 
-输出：
-
-```
-注意力权重矩阵 shape: [5, 5]
-tensor([[1.0000, 0.0000, 0.0000, 0.0000, 0.0000],
-        [0.4820, 0.5180, 0.0000, 0.0000, 0.0000],
-        [0.3450, 0.3620, 0.2930, 0.0000, 0.0000],
-        [0.2620, 0.2570, 0.2230, 0.2580, 0.0000],
-        [0.1810, 0.1580, 0.2280, 0.2050, 0.2280]])
-```
-
-每行对应一个 token 看前面所有 token 的权重分布。第 0 行（"The"）只能看自己，权重为 1.0。第 4 行（"street"）看前面所有 token，权重分布在 0.16-0.23 之间——随机初始化的投影矩阵还没有学到有意义的注意力模式。训练后，某些 token 对之间的权重会显著升高。
+输出是一个下三角的 $5\times5$ 权重矩阵，每行和为 1。第 0 个位置只能访问自身；后续位置可以对此前各位置分配权重。随机投影尚未学到语言关系，不能据此解释具体词语之间的依赖。
 
 ### Causal Mask
 
-decoder-only 模型（GPT、Llama）在训练时只能看到当前 token 和之前的 token。mask 的做法是把 softmax 之前分数矩阵的上三角填为 $-\infty$：
+因果 decoder-only 模型（如 Qwen3）在训练时只能看到当前 token 和之前的 token。mask 的做法是把 softmax 之前分数矩阵的上三角填为 $-\infty$：
 
 $$\text{mask}_{ij} = \begin{cases} 0 & j \leq i \\ -\infty & j > i \end{cases}$$
 
@@ -112,11 +99,11 @@ graph LR
 
 ### 复杂度
 
-$QK^T$ 是 $N \times N$ 的矩阵。对于 Llama 2 7B，序列长度 4096 时：
+$QK^T$ 是 $N\times N$ 的矩阵。仅考虑一个样本的一个 head，序列长度 4096 时有：
 
 $$4096 \times 4096 = 16,777,216 \text{ 元素}$$
 
-FP32 占用 64 MB，FP16 占用 32 MB。这是单次 attention 的空间复杂度 $O(N^2)$。时间复杂度也是 $O(N^2 \cdot d)$——序列长度翻倍，计算量变为 4 倍。这也是为什么长上下文（128K+）成为实际瓶颈。
+该矩阵用 FP32 存储占 64 MiB，FP16 占 32 MiB。批量与 head 数还要继续乘入。朴素 Attention 的分数矩阵空间复杂度为 $O(N^2)$，计算复杂度为 $O(N^2d_k)$；融合内核可以避免保存完整分数矩阵，但不因此消除全注意力的平方计算量。
 
 Self-Attention 让每个 token 能"看到"前面的所有 token。但一套 QKV 只提供单一的注意力模式——它把所有上下文关系压缩到同一组权重里。
 
@@ -135,23 +122,25 @@ $$\text{MultiHead}(X) = \text{Concat}(\text{head}_1, \ldots, \text{head}_h) W_O$
 
 不同 head 可以学习不同类型的上下文关系。训练后的模型中，某些 head 倾向于关注语法关系（主谓一致、时态匹配），某些关注语义关系（指代消解、同义替换），某些关注局部模式（相邻词的搭配）。
 
-Llama 2 7B 有 32 个 head，每个 head 维度 $d_k = 4096 / 32 = 128$。Llama 2 70B 有 64 个 head，每个 head 维度 $d_k = 8192 / 64 = 128$。经验上，每个 head 的维度保持在 64-128 之间是较好的平衡点——太小则表达能力不足，太大则 head 之间冗余增加。
+以 Qwen3-8B 为例，隐藏维度为 4096，Q head 数为 32，每个 head 的维度是 128；它使用 8 个 KV head，后面会说明这种分组方式。不同架构可以选择其他 head 维度，具体取决于表示能力与内核效率的取舍。
 
 ### SwiGLU 前馈网络
 
-Attention 做完信息交换后，每个 token 的表示里融合了上下文。模型还需要对每个 token 做独立的非线性变换——"理解这个 token 本身"。这就是 FFN 的作用。
+Attention 聚合可见位置的信息，FFN 随后对每个位置的表示做非线性变换。它在 token 之间共享参数，但逐位置执行。
 
-现代 LLM 使用 SwiGLU 激活：
+Qwen3 等模型的 FFN 使用 SwiGLU：
 
-$$\text{SwiGLU}(x) = \text{Swish}(xW_1) \odot (xW_3) \cdot W_2$$
+$$\text{SwiGLU}(x) = \big(\text{Swish}(xW_1) \odot (xW_3)\big)W_2$$
 
 其中 $\text{Swish}(z) = z \cdot \sigma(\beta z)$，$\beta$ 通常取 1。SwiGLU 有三组权重（$W_1, W_2, W_3$），相比传统 ReLU FFN 多了 $W_3$ 作为门控支路。
 
-FFN 的参数量占 Transformer 层的绝大部分。Llama 2 7B 中：
+Qwen3-8B 的 FFN 中间维度为 12288。忽略 bias 与 Norm 后，单层主要参数可计算为：
 
-- Attention 层：$4 \times 4096 \times 4096 = 67\text{M}$ 参数（Q/K/V/O 四个投影）
-- SwiGLU FFN：$3 \times 4096 \times 11008 = 135\text{M}$ 参数
-- FFN 占比：$135 / (67 + 135) \approx 67\%$
+- Q/O 投影：$2\times4096\times4096$；
+- K/V 投影：$2\times4096\times(8\times128)$；
+- SwiGLU FFN：$3\times4096\times12288$。
+
+Attention 投影合计约 41.94M 参数，FFN 约 150.99M，占这两部分之和的约 78.3%。这里使用的是 GQA 配置，不能沿用四个等宽投影的 MHA 参数公式。[Qwen3-8B 官方配置](https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json)
 
 ```python
 # SwiGLU 具象化：输入 (2, 10, 512)，经过 FFN 后 shape 不变
@@ -168,7 +157,7 @@ class SwiGLU(nn.Module):
     
     def forward(self, x):
         # w1 支路经过 silu 激活
-        # w3 支路作为门控（类似 GRU 的更新门）
+        # 两条支路逐元素相乘，构成门控变换
         # 逐元素相乘后投影回 dim
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
@@ -187,132 +176,84 @@ print(f"参数量: {params:,}")
 ```
 输入 shape: [2, 10, 512]
 输出 shape: [2, 10, 512]
-参数量: 1,574,912
+参数量: 1,572,864
 ```
 
-FFN 在每个位置独立计算，不依赖其他 token 的表示。Attention 负责"看哪些 token"，FFN 负责"怎么理解这个 token"。两者交替堆叠，构成了 Transformer 层的核心计算。
+Attention 与 FFN 交替堆叠：前者聚合上下文，后者变换各位置的特征。FFN 接收的已经是包含上下文的信息，不宜简单解释成“只理解 token 本身”。
 
-推理时，每个生成的 token 都需要缓存前面所有 token 的 K 和 V，否则每次生成都要重新计算。这些缓存就是 KV Cache。32 个 head × 128 维 × 2 bytes (BF16) × 2 (K+V) = 16 KB/token。上下文长度 128K 时，仅 KV Cache 就占用 2 GB——这是推理场景下一个不可忽视的数字。
+自回归推理通常缓存各层历史位置的 K/V，避免每步重做历史前向。以下比较统一注明单层与全部层，具体显存还要乘请求长度和活跃请求数。
 
 ![Multi-Head Attention 不同 head 关注不同类型的上下文关系](/assets/transformer-architecture/multi-head-attention.png)
 
 ---
 
-## 三、KV Cache 优化策略
+## 三、KV Cache 的架构差异
 
-KV Cache 的大小直接正比于 KV head 的数量。减少 KV head 数是最直接的优化路径，但需要权衡生成质量。
+### MHA、MQA 与 GQA
 
-### MQA：多查询注意力
+MHA 为各个 Q head 配置独立的 K/V head。MQA 让所有 Q head 共享一组 K/V，GQA 则让多组 Q head 分别共享 K/V。对相同的层数与 head dimension，缓存大小正比于 KV head 数。
 
-Multi-Query Attention 让所有 Q head 共享同一组 K 和 V：
+用 32 个 Q head、head dimension 128、BF16 缓存作单层对照：
 
-| 组件 | MHA | MQA |
-|------|-----|-----|
-| Q heads | $h$ | $h$ |
-| KV groups | $h$ | $1$ |
+| 结构 | KV head 数 | 单层每 token 缓存 |
+|---|---|---|
+| MHA | 32 | 16 KiB |
+| MQA | 1 | 0.5 KiB |
+| GQA | 8 | 4 KiB |
 
-KV Cache 从 $h \times d_k$ 降到 $1 \times d_k$，压缩比为 $h:1$。Llama 2 7B 从 16 KB/token 降到 0.5 KB/token，128K 上下文从 2 GB 降到 64 MB。
+这些是同一组假设维度下的存储比较，不代表同一个检查点可以直接切换结构。共享程度会影响表示能力，需要结合训练与评测判断，不能给出固定的质量排序。
 
-代价是质量下降——所有 head 被迫从同一份 KV 中提取信息，失去了多视角的表达能力。
+Qwen3-8B 使用表中 GQA 的维度并有 36 层，全部层每 token 的 BF16 KV 为 $36\times4=144$ KiB。单条 32768-token 请求需要 4.5 GiB。只有注明层数，单层 4 KiB 才能转换为整模型占用。
 
-### GQA：分组查询注意力
+### MLA：缓存联合压缩表示
 
-Grouped Query Attention 在 MHA 和 MQA 之间取折中。Q 保持 $h$ 个 head，KV 分为 $g$ 组，每组内的 head 共享 K 和 V：
+[DeepSeek-V2](https://arxiv.org/abs/2405.04434) 提出的 MLA 从当前隐藏状态生成 K/V 的联合低维表示。可把内容部分概括为：
 
-| 模型 | Q heads | KV groups | 压缩比 |
-|------|---------|-----------|--------|
-| Llama 3 8B | 32 | 8 | 4:1 |
-| Llama 3 70B | 64 | 8 | 8:1 |
+$$c_t^{KV}=W^{DKV}h_t,\qquad k_t^C=W^{UK}c_t^{KV},\qquad v_t^C=W^{UV}c_t^{KV}$$
 
-Llama 3 8B 的 KV Cache 从 16 KB/token 降到 4 KB/token（128K 上下文 512 MB），质量损失远小于 MQA。GQA 已成为现代 LLM 的标准配置。
+推理保留低维的 $c_t^{KV}$，并结合权重吸收等计算变换，减少存储和搬运完整 K/V 的需要。位置编码部分采用解耦设计，还要保存相应的 key 状态，因此缓存不只有一个低维向量。
 
-### MLA：多头潜注意力
+MLA 的缓存应按联合压缩表示与位置相关状态分别计数。与 MHA/GQA 比较时，需统一层数、缓存精度和上下文长度。
 
-DeepSeek-V2 提出了更激进的压缩方案。不是简单共享 KV，而是对 K 和 V 做低秩投影：
-
-$$K_{\text{latent}} = K \cdot W_{\text{down}}, \quad V_{\text{latent}} = V \cdot W_{\text{down}}$$
-
-推理时只缓存低维的 $K_{\text{latent}}$ 和 $V_{\text{latent}}$，需要计算 attention 时再投影回原始维度：
-
-$$K = K_{\text{latent}} \cdot W_{\text{up}}, \quad V = V_{\text{latent}} \cdot W_{\text{up}}$$
-
-DeepSeek-V2 的 latent 维度只有 512，而原始维度是 7168。压缩比达到 14:1，同时保持了接近 MHA 的生成质量。
-
-### KV Cache 对比
-
-```mermaid
-graph LR
-    A["MHA<br/>32 heads<br/>16 KB/token"] -->|"共享 KV<br/>质量下降"| B["MQA<br/>1 KV group<br/>0.5 KB/token"]
-    A -->|"分组共享<br/>质量轻微损失"| C["GQA<br/>8 KV groups<br/>4 KB/token"]
-    A -->|"低秩压缩<br/>质量接近 MHA"| D["MLA<br/>latent 512<br/>~1 KB/token"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#f0f4ff,stroke:#5b8def,color:#333
-    style D fill:#e8f5e9,stroke:#4caf50,color:#333
-```
-
-| 方案 | Q heads | KV groups | KV Cache / token | 128K 上下文 | 质量 |
-|------|---------|-----------|-----------------|-------------|------|
-| MHA | 32 | 32 | 16.0 KB | 2.0 GB | 基准 |
-| MQA | 32 | 1 | 0.5 KB | 64 MB | 明显下降 |
-| GQA | 32 | 8 | 4.0 KB | 512 MB | 接近 MHA |
-| MLA | 128 | 128 (低秩) | ~1.0 KB | 128 MB | 接近 MHA |
-
-KV Cache 的压缩解决了推理显存问题。但注意力机制本身还有一个更底层的瓶颈——$N \times N$ 的 attention 矩阵需要在 GPU 的慢速内存和快速缓存之间反复搬运。GPU 大部分时间不是在计算，而是在等数据。
-
----
+架构压缩主要减少 KV 的长期存储。Prefill 中的注意力中间结果还需要另行优化，FlashAttention 处理的是这部分计算与 HBM 访问。
 
 ## 四、FlashAttention 与 IO 优化
 
-### GPU 内存层级
+### HBM 与片上存储
 
-A100 GPU 有两层关键存储：
+Q/K/V 和输出通常存放在 HBM；计算过程中，GPU 用寄存器和各 SM 的共享内存保留小块中间结果。片上存储容量有限，并按计算单元组织，不能把全芯片缓存容量当成单个线程块可以使用的一块空间。
 
-| 层级 | 容量 | 带宽 | 位置 |
-|------|------|------|------|
-| HBM | 40-80 GB | 1.5-2.0 TB/s | 芯片外 |
-| SRAM | ~40 MB | ~19 TB/s | 芯片内 |
+朴素实现先生成分数矩阵，写回 HBM，再读取它做 softmax，最后与 V 相乘。以单 head、4096 长度为例，FP16 分数矩阵已有 32 MiB，多次读写会增加 HBM 流量。
 
-SRAM 带宽是 HBM 的 12 倍以上，但容量只有 HBM 的百万分之一。算法的性能取决于数据在这两层之间的搬运次数，而不是 FLOP 数量。
-
-### 标准实现的 IO 瓶颈
-
-对于 $N=4096$ 的序列，attention 矩阵 $QK^T$ 有 16.8M 元素。FP32 占用 64 MB，FP16 占用 32 MB。而 A100 的 SRAM 只有约 40 MB——attention 矩阵本身就已经接近或超过 SRAM 容量。
-
-标准 attention 的 IO 路径：
-
-```
-HBM: Q, K, V → 加载到 SRAM → 算 QK^T → 写回 HBM (64 MB)
-     ↓
-HBM: 读 QK^T → 算 softmax → 写回 HBM (32 MB)
-     ↓
-HBM: 读 softmax → 读 V → 算 ×V → 写回 HBM (32 MB)
+```text
+Q、K → 分数矩阵写入 HBM
+分数矩阵 → softmax → 权重写入 HBM
+权重、V → 输出
 ```
 
-中间结果（$QK^T$、softmax 输出）都要反复经过慢速的 HBM。对于 4096 序列，仅前向传播就需要读写超过 200 MB 的 HBM 数据。
+大中间结果的搬运可能成为瓶颈；具体占比仍取决于长度、批量、精度和内核，不能概括为所有场景下“GPU 大部分时间都在等数据”。
 
 ### FlashAttention 的做法
 
-FlashAttention 的核心思想是：不要让中间结果离开 SRAM。
+FlashAttention 将注意力计算分块，避免把完整分数矩阵与权重矩阵写入 HBM。
 
-**Tiling：** 把 Q、K、V 切成大小为 $B_r \times B_c$ 的小块，每块装进 SRAM。对于 40 MB 的 SRAM，典型 tile 大小为 128 × 128。逐块计算 $QK^T$ 的局部结果，在 SRAM 内完成 softmax 归一化。
+**Tiling：** 将 Q/K/V 分成内核可以处理的小块，局部分数与输出累积保留在片上。tile 大小受共享内存、寄存器、head dimension 和并行方式约束。
 
-**Online Softmax：** 不需要等整个 $N \times N$ 矩阵算完再做 softmax。在 SRAM 里逐块维护 running max 和 running sum，边算边归一化。
+**Online Softmax：** 逐块维护最大值、归一化和与加权输出，读入新块时重新缩放已有累积结果，从而计算与整体 softmax 等价的结果。
 
-**Recomputation：** 反向传播需要 attention 权重，但不缓存 $N \times N$ 矩阵。而是重新加载 Q、K、V 的 tile，在 SRAM 里重新计算。用额外的一次前向计算，换取 $O(N^2)$ 的显存节省。
+**Recomputation：** 训练反向时，根据输入和保存的归一化统计重新计算局部注意力，减少保存大中间矩阵的需求。它用部分额外计算换取更少的存储与 HBM 访问。
 
 ![标准 Attention 与 FlashAttention 的 IO 路径对比：标准实现中间结果反复写入 HBM，FlashAttention 在 SRAM 内完成全部计算](/assets/transformer-architecture/flashattention-io-comparison.png)
 
-FlashAttention v1（Dao et al., NeurIPS 2022）在 A100 上比标准实现快 2-4 倍。v2（2023）通过优化并行度和减少 shared memory 访问，比 v1 再快约 2 倍。显存从 $O(N^2)$ 降到 $O(N)$。
+[FlashAttention](https://arxiv.org/abs/2205.14135) 和 [FlashAttention-2](https://arxiv.org/abs/2307.08691) 分别讨论了 IO 优化与进一步的并行改进。加速比依赖对照实现、硬件和序列规格；它避免平方大小的中间存储，但全注意力计算仍随序列长度平方增长。
 
-IO 优化后，attention 的瓶颈从"等数据"变成了"算得快"。但只有把各个组件组装成一个完整的 Transformer Block，才能看到它们在真实模型中的协作方式。
+下面用简化 Block 把 Attention、FFN、Norm 与残差连接组合起来。
 
 ---
 
-## 五、完整 Transformer 结构
+## 五、Transformer Block 示例
 
-将前面的组件组装为一个完整的 Transformer Block。采用 Pre-Norm 结构，归一化用 RMSNorm，注意力带 causal mask，激活用 SwiGLU：
+示例采用 Pre-Norm、RMSNorm、因果 MHA 和 SwiGLU，便于观察数据流。它省略了 RoPE、GQA、KV Cache 和词表输出层，因此不等同于某个真实模型的完整实现。
 
 ```python
 import torch
@@ -329,8 +270,8 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        norm = x.float().pow(2).mean(dim=-1, keepdim=True).add(self.eps).sqrt()
-        return (x * norm.rsqrt() * self.weight).to(x.dtype)
+        inv_rms = x.float().pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return (x.float() * inv_rms * self.weight).to(x.dtype)
 
 
 class SwiGLU(nn.Module):
@@ -365,7 +306,7 @@ class CausalSelfAttention(nn.Module):
         v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         # 注意力分数 (B, H, T, T)
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        mask = torch.triu(torch.full((T, T), float('-inf')), diagonal=1)
+        mask = torch.triu(torch.full((T, T), float('-inf'), device=x.device), diagonal=1)
         scores = scores + mask
         attn = torch.softmax(scores, dim=-1)
         # 加权聚合并 reshape 回 (B, T, D)
@@ -408,15 +349,7 @@ total_params = sum(p.numel() for p in model.parameters())
 print(f"总参数量: {total_params:,} ({total_params / 1e6:.1f}M)")
 ```
 
-输出：
-
-```
-输入 shape: [2, 10, 512]
-输出 shape: [2, 10, 512]
-输入 mean/std: -0.0078 / 0.9901
-输出 mean/std: -0.0085 / 1.0370
-总参数量: 5,244,928 (5.2M)
-```
+输入和输出形状都为 `[2, 10, 512]`，两层合计 5,244,928 个参数。随机输入和初始化会改变均值、标准差等统计量；单次运行的统计不能证明训练稳定性。
 
 ```mermaid
 graph TD
@@ -438,10 +371,6 @@ graph TD
     style Y fill:#e8f5e9,stroke:#4caf50,color:#333
 ```
 
-shape 从输入到输出保持不变——(batch, seq_len, dim)。但输出中的每个 token 已经融合了整个序列的上下文信息。mean/std 保持稳定，说明 RMSNorm + Pre-Norm 的组合有效地控制了激活值的分布范围。
-
-把这个 Block 叠 32 层，就是 Llama 2 7B 的计算引擎。每层的计算路径完全一致：RMSNorm → Causal Self-Attention → 残差 → RMSNorm → SwiGLU FFN → 残差。32 层串联后，每个 token 的最终表示经过了 32 轮上下文融合和非线性变换。
-
-架构本身已经完整。但参数还是随机初始化的——输出是一组均匀分布的随机 token，不包含任何语义知识。训练 100 万步后，同一个架构能写出流畅的代码、回答物理问题、翻译中英双语。
+残差连接使 Block 的输入输出维度保持一致；因果 Attention 保证每个位置只融合可见上下文。实际模型还需位置机制、缓存、词表投影与训练目标。架构和张量形状正确只是第一步，是否学到有效能力取决于数据、优化与评估。
 
 **下一步：预训练目标、优化器、分布式训练和对齐方法。**

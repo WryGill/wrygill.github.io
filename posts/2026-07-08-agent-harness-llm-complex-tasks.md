@@ -6,46 +6,34 @@ categories: [Engineering]
 katex: true
 ---
 
-> 同一个 LLM，放在聊天框里和放在 Agent Harness 里，面对同一个任务表现可以差很远。
->
-> 让一个普通聊天模型修测试失败。它会解释可能的原因——某个分支没判空、测试断言过期或者环境配置不一致。然后停下来等你决定下一步。
->
-> 把它放进 Harness 里，同一模型会先跑测试，读错误堆栈，打开源文件，定位问题，修改代码，再跑一次验证。如果新错误出现，它继续处理。
->
-> 两套输出来自同一个模型。决定表现的差异不在模型内部，在模型外那层软件框架里。
+让模型修复测试失败，需要的不只是一段修复建议。系统还要运行测试、读取堆栈、允许模型查看和修改文件，再把验证结果交回模型，供它决定下一步。
 
-Sebastian Raschka 在他 2026 年 4 月的文章里给过一个直接的说法："I suspect that if we dropped one of the latest, most capable open-weight LLMs, such as GLM-5, into a similar harness, it could likely perform on par with GPT-5.4 in Codex or Claude Opus 4.6 in Claude Code。"
-
-这句话不是在夸模型迭代多快，是在说：**Agent Harness 的品质对最终任务表现的影响，可能不亚于模型升级。** 它解释了为什么同一个模型在 chat 界面里只会回答，在 Claude Code 或 Codex CLI 里却能修 bug、做重构、走通一整套工程流程。
-
-Harness 不是一个外层包装箱。它是把 LLM 从单次文本生成器驱动成持续执行系统的那层软件基础设施。Parallel.ai 的定义更彻底——"everything except the LLM itself"。
-
-这篇文章不打算展开整个 Harness Engineering 的概念谱系，只讲三个工程切口：回路怎么建立，信息怎么分层，边界和分工怎么设计。
+Agent Harness 负责组织这些执行与反馈，管理工具、上下文和权限。模型能力仍然重要，同一模型获得的环境信息和工具不同，任务表现也会改变。本文沿着执行回路、上下文管理、操作边界与分工展开。
 
 ## 一、执行回路
 
-复杂任务很难用一个 prompt 一次性解决。修一个测试的背后是一串动作：跑测试拿失败信号，读错误堆栈找到问题文件，搜索相关代码建立上下文，修改实现，再次运行验证。每一步都是在上一步的基础上推进，而不能提前计划好。
+修复测试通常经历运行、定位、修改、再验证等步骤。可以先做计划，但具体操作需要根据执行结果调整，例如首次失败可能来自依赖配置，而非待修改的业务逻辑。
 
-这个问题本质上和 LLM 的生成方式有关——它生成下一个 token 时能看到前面的所有 token，但它看不到未来的执行结果。没有工具反馈，它的规划只能停在文本层：可以写出一个看起来不错的修复路线，但不知道测试有没有真的通过，不知道改动有没有破坏其他路径。
+模型可以根据已有信息预测下一步，却无法提前知道命令在当前环境中的真实结果。工具反馈为后续判断提供证据：测试是否通过、文件是否存在、改动是否引入新错误。
 
 Agent Harness 解决这个问题的办法是让 LLM 进入一个执行回路。
 
-Claude Code 官方文档把核心工作方式描述为三个阶段：**gather context、take action、verify results**。这三个阶段不是顺序执行的，而是每轮工具调用都会走一遍：看到新信息（gather），决定做什么（take action），观察结果（verify），然后决定下一步。Parallel.ai 把这套回路拆得更细一些——Intent Capture、Tool Call Execution、Context Management、Verification、Handoff——五个阶段形成了一个闭环，每一步的输出都可能改变下一步的方向。
+Claude Code 文档用收集上下文、执行动作、验证结果概括回路。这些活动会交错发生，一次工具调用可能只完成其中一部分。[工作机制说明](https://code.claude.com/docs/en/how-claude-code-works)
 
-从工程角度看，这个回路在做一件简单但关键的事：让 LLM 每次输出都变成可以被环境验证的动作。
+一次修复中的工具调用可以是：
 
 - 模型输出 `run tests` → Harness 执行并返回输出
 - 模型根据输出决定 `read_file("src/foo.py")` → Harness 返回文件内容
-- 模型判断问题位置并 emit `edit` → Harness 应用到文件系统
+- 模型判断问题位置并发出 `edit` 调用 → Harness 应用到文件系统
 - 模型再次触发 `run tests` → Harness 返回新结果
 
-每一步都在真实环境里落地，再把结果写回上下文。输出不再是最终答案，而是任务推进过程中的一个中间状态。
+Harness 执行获准的工具调用，将输出和错误反馈写回上下文。模型据此继续操作或结束任务；普通文本输出并不会自动成为系统操作。
 
-Sebastian Raschka 在他的 Mini Coding Agent 实现里放了一个 Live Repo Context 组件，每次启动时自动收集 git 状态、README、AGENTS.md 等工作区摘要。这不是 prompt 技巧，是 Harness 层在模型任何判断之前，先做一次环境快照。模型的第一轮输入就已经包含了仓库的当前状况，而不需要靠猜测。
+启动时可以收集 Git 状态、项目说明和适用的工作区约定，让模型了解当前分支与已有改动。收集范围要有边界，避免无关日志或敏感配置进入上下文。
 
-LangChain 的文章说 "Bash + code exec is a big step towards giving models a computer。" 本质上，Harness 给了 LLM 一个可以观察和操作的世界，而模型每一次输出都变成了这个世界的真实操作。
+文件系统工具让模型按需读写材料，也能把较长的中间结果保存为文件，后续再检索。[LangChain 的 Harness 分析](https://www.langchain.com/blog/the-anatomy-of-an-agent-harness) 将它视为持久状态与上下文管理的基础组件。
 
-回路一旦建立起来，复杂任务的执行就变成了「感知－判断－动作－验证」的反复交织。反馈真实，模型才能收敛到正确的方向上。但回路每跑一轮都会产生新信息——日志、代码片段、搜索结果、中间假设——这些信息如果全部留存在上下文里，多轮之后任务会被噪音拖垮。
+每轮执行都会产生代码片段、日志和假设。全部保留会增加输入成本，并让过期信息干扰后续判断，因此执行回路还需要管理信息的保留与读取。
 
 ```mermaid
 graph TD
@@ -54,32 +42,33 @@ graph TD
     Judge --> Act[执行动作]
     Act --> Verify[验证结果]
     Verify -->|新失败| Observe
-    Verify -->|通过| Done[任务收敛]
+    Verify -->|通过| Done[完成验证]
 ```
 
 ## 二、上下文分层
 
-Anthropic 在 2025 年 9 月发布了一篇工程博客，专门讲 context engineering。里面有一个核心观察：transformer 的注意力机制是 n² 的，token 越多 recall 越差。这不是等上下文窗口满了才出问题，而是从加载第一个额外 token 就开始退化。他们把这种现象叫做 **context rot**——信息退化，不是信息溢出。
+长上下文可能降低模型稳定利用相关信息的能力，Anthropic 的上下文工程文章将这类现象称为 context rot。这种信息利用问题还受任务、信息位置和模型影响，需要通过具体任务评估。[原文](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
 
-这就意味着，让模型在多轮工具调用后仍然能做出正确判断，不是靠塞更多 token，而是靠让上下文里的 token 更相关。
+上下文管理需要关注哪些信息支持当前决策，而不只是还剩多少 token 容量。
 
-Claude Code 的做法是做 compaction。官方博客描述得很具体：当上下文窗口接近上限时，Harness 主动压缩——丢弃冗余的工具调用记录和输出，只保留最近 5 个访问过的文件和一段结构化摘要，然后重新开始一轮上下文。注意，这个决策是 Harness 层做的，不是模型自己判断哪些内容可以丢。
+Compaction 将历史记录压缩为后续工作所需的摘要，例如当前目标、已完成改动、未解决问题和验证结果。何时触发、如何生成摘要、保留哪些原始消息，由具体 Harness 实现决定。
 
 更底层的信息分层不只在 compaction 时才发生。Anthropic 的文章还提到了两种策略：
 
 - **JIT context loading**：模型不预加载所有信息，而是通过轻量级工具（文件大小、命名约定、目录结构）先判断哪些值得读，再按需读入。这比把整个工作区都塞进 prompt 给模型要高效。一个只读少量关键配置文件和按需取文件的模式，远好于试图加载全部。
 - **Progressive disclosure**：先用低成本方式获取概况，再决定是否深入。这对应人类工程师的工作习惯——先看目录结构，再决定打开哪个文件，而不是同时读所有文件。
 
-Sebastian Raschka 的 prompt 设计理念也基于类似的分层：把上下文切成 **Stable Prompt Prefix**（工具描述、工作区摘要——基本不变，可以缓存）和 **Changing Session State**（用户最新请求、最近几轮工具结果）。前者节省每次的 token 消耗，后者保持当前任务的连续性。
+输入还可以按变化频率组织。较稳定的工具描述和项目约定放在前部，有助于前缀缓存；最新请求与工具结果在每轮更新。工作区状态可能随编辑变化，应在更新后重新组织输入。
 
-LangChain 的文章则指出 filesystem 是 Harness 最基础的上下文管理原语。Git 提供版本记录，AGENTS.md / CLAUDE.md 提供跨会话知识，工作区文件是自然的信息载体。Harness 不需要把所有信息塞进 prompt——它只需要让模型知道信息在哪里、怎么取。
+文件中的内容也不需要全部预加载。目录、路径和检索工具让模型知道材料在哪里，再按任务读取；AGENTS.md 等约定的加载范围则由产品规则决定。
 
-信息生命周期在这里大致分三层：
+信息生命周期可以分为三层：
+
 - **跨会话层**：CLAUDE.md、AGENTS.md、项目约定——每次会话都加载但不频繁变化
 - **任务现场层**：当前目标、已修正的文件、待验证假设——当前会话持有时更新
 - **临时证据层**：单次工具调用返回结果、错误输出、搜索摘要——用完可丢弃
 
-这三层对应不同的管理策略。第一层靠每次启动时注入，第二层靠 compaction 和摘要保持，第三层靠 progressive disclosure 和结果截断处理。Anthropic 的文章给了这段话一个精练的指导原则：**"Find the smallest possible set of high-signal tokens."**
+跨会话约定可由启动加载或按目录加载提供，任务状态需要在压缩后仍能恢复，临时证据可以摘要或截断。重要结论最好保留来源路径，便于重新核查，而不是只能相信压缩后的转述。
 
 ```mermaid
 graph TD
@@ -98,7 +87,7 @@ graph TD
     classDef temp fill:#f5f5f5,stroke:#9e9e9e,stroke-width:2px,color:#333
 ```
 
-但当模型能观察、能跨多轮、能记住以后，它就能真实改变环境。这时下一个问题就会出现：一个能写文件和跑命令的模型，也会把错误判断执行得很彻底。
+写文件和执行命令会改变工作区状态，错误判断因此也可能产生实际影响。执行回路需要在操作前检查权限，并在操作后验证结果。
 
 ## 三、边界与分工
 
@@ -108,11 +97,11 @@ graph TD
 
 第二类是上下文污染风险。长任务中的探索过程会大量消耗上下文——读十几个文件、排除三条错误假设、做两次局部重构尝试。如果所有中间结果都留在主线上下文里，等到真正定位到根因时，上下文里已经堆满了无用信息。
 
-Agent Harness 对这两种风险的应对，分别是权限与 Hooks、sub-agent 分工。
+操作边界可以由权限检查、Hooks 和沙箱共同约束。独立的探索上下文则可以减少无关过程信息进入主任务。
 
 ### 权限验证
 
-Sebastian Raschka 在归纳 coding agent 的六大组件时，把工具验证和权限作为一个独立层次来描述。模型发出工具调用后，Harness 不是直接执行，而是走一个检查链：工具是否已知 → 参数是否合法 → 文件路径是否在工作区内 → 操作是否需要用户批准。每一步都可能阻止这次调用或要求人工确认。
+工具执行前可检查名称、参数、目标路径与授权范围。路径验证还需处理规范化和符号链接等细节，不能只依靠模型在文字上承诺遵守约定。
 
 ```mermaid
 graph LR
@@ -129,40 +118,22 @@ graph LR
     Approve -->|拒绝| Block
 ```
 
-Claude Code 的 Hooks 提供了更细粒度的控制。PreToolUse hook 可以在工具即将执行前触发——匹配写入工具，检查目标路径是否为 `.env`，如果命中则返回 deny。这意味着敏感操作不在模型的能力范围内，而是在模型和系统之间由 Harness 层拦截。
+Hooks 可以在工具调用前检查请求并拒绝不允许的操作。例如，写入工具命中某类受保护路径时，规则返回拒绝。具体 hook 事件与返回格式以所用产品版本为准；这类检查应覆盖实际可用的写入路径。
 
-LangChain 文章从另一个角度讨论这个问题：sandbox。提供隔离的文件系统和网络环境，模型可以自由操作但不会影响生产系统。这和安全验证是互补的——验证拦截已知风险，sandbox 隔离未知风险。
+沙箱通过文件系统、进程和网络隔离限制操作影响。权限验证与隔离互补，能限制哪些动作可执行、动作最多影响哪里；其效果取决于隔离配置。
 
 ### Sub-agent 分工
 
-长任务里，探索污染和主线保持之间的矛盾天然存在。主线需要干净和连续，探索需要充分和试错。把两者塞进同一个上下文窗口会导致两件事都做不好。
+独立调查可能产生大量被排除的假设。将它放到单独上下文中，再返回结论与证据，可以减少主任务携带的过程信息。
 
-Anthropic 的工程博客描述了这个工程模式：主 agent 协调整个任务，把深度探索交给专门的 sub-agent。每个 sub-agent 有独立的上下文窗口和工具权限，做完后只返回一段结构化的结果摘要——官方提到大约 1000-2000 token——给主线。探索过程中的噪音在 sub-agent 的上下文里消耗掉，不会出现在主线的判断路径上。
+Sub-agent 可以接收一个明确子任务，在独立上下文中调查，最后返回发现、来源和未解决问题。主 agent 仍需检查结论是否满足原任务约束；摘要长度没有适合所有任务的固定值。
 
-这种设计和并行没有直接关系。它解决的是上下文的隔离问题。主线负责保持目标、约束和最终决策，sub-agent 负责消耗噪音并返回结构化结论。
+上下文隔离与并行是两个维度：子任务可以串行调查，也可以并行执行。若多个 agent 同时修改共享文件，还需要明确文件归属与合并方式，避免覆盖彼此改动。
 
-### 三者合起来才能工作
-
-回路、上下文分层、边界分工这三层不是独立的组件，而是互为前提：
-
-- 没有回路，模型无法接触真实环境
-- 没有上下文分层，多轮任务无法持续
-- 没有边界和分工，能动手的模型要么不安全，要么在大任务里被噪音冲散
-
-LangChain 文章里有一句总结恰当：**"Harnesses today are largely delivery mechanisms for good context engineering。"** 如果把上下文工程理解为信息的生命周期管理——什么信息在什么时候进入、什么时候留下、什么时候丢弃——那回路就是让信息流动的管道，边界和分工就是控制每股信息流向的阀门和路线。
-
----
-
-Agent Harness 不是给 LLM 套了一层 UI 卡壳，也不是简单地组合工具、记忆、规划几个模块。它真正在做的事情是：建立一个让 LLM 的输出能够进入真实环境、被验证、被反馈、被管理、被约束的工程系统。
-
-Sebastian Raschka 多次提到一个观点——"a lot of apparent 'model quality' is really context quality。" 模型的迭代当然在推动 Agent 的能力边界，但在当前阶段，同等模型在不同 Harness 里的表现差距，很大程度上来自回路设计、上下文工程和控制机制的成熟度，而不是一个模型的 prompt 写得更长。
-
-这也是这篇文章想表达的主线：讨论 Agent 能力时，问题不该只停在模型是不是更强。更有工程价值的问题是：它能不能看到现场、能不能把判断带到环境里、能不能在几十轮之后还记得目标和约束、能不能在出错时被拦下来。
+执行回路提供反馈，上下文管理保留当前判断所需的信息，权限与隔离约束操作影响。评估 Harness 时，可以用同一组任务记录完成率、工具失败、上下文压缩后的遗漏，以及最终验证是否充分，而非仅比较提示词长度或调用次数。
 
 **参考资料**
 
-- Anthropic, "Effective Context Engineering for AI Agents," Sep 2025. https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
-- Parallel.ai, "What is an agent harness in the context of large-language models?," Dec 2025. https://parallel.ai/articles/what-is-an-agent-harness
-- Sebastian Raschka, "Components of A Coding Agent," Apr 2026. https://magazine.sebastianraschka.com/p/components-of-a-coding-agent
-- Vivek Trivedy (LangChain), "The Anatomy of an Agent Harness," 2026. https://www.langchain.com/blog/the-anatomy-of-an-agent-harness
-- Claude Code documentation. https://code.claude.com/docs/en/how-claude-code-works
+- [Anthropic：Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+- [LangChain：The Anatomy of an Agent Harness](https://www.langchain.com/blog/the-anatomy-of-an-agent-harness)
+- [Claude Code 工作机制](https://code.claude.com/docs/en/how-claude-code-works)

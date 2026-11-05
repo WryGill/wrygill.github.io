@@ -6,352 +6,142 @@ categories: [AI Infrastructure]
 katex: true
 ---
 
-> 你做了一个客服机器人。用户问："我的订单什么时候到？"
-> 
-> 预训练模型的回答是："我的订单什么时候到？这是一个常见的问题。订单的到达时间取决于多个因素，包括发货地、目的地、物流公司..."
-> 
-> 用户要的是一个具体的日期，不是一篇物流科普文章。
+基础模型与指令模型可以拥有相近的架构，面对同一个请求却表现不同。输入“用两句话解释 KV Cache”，基础模型可能继续补全一段教程，指令模型则更倾向于按要求回答。后训练调整的，就是这种遵循指令和组织答案的行为。
 
-这是每个做 LLM 应用的人都会遇到的问题：预训练模型会写文章，但不会回答问题。
+训练方法需要按用途区分：SFT 使用示范回答，偏好优化使用回答之间的比较，RLVR 使用可验证奖励；PPO、GRPO、DAPO 则涉及策略如何更新。实际训练会根据数据和反馈条件组合这些方法。
 
-你可能觉得这是 prompt 的问题，试了各种 prompt engineering 技巧，发现效果有限。根本原因不在 prompt，而在模型本身——它没有学过"什么是好的回答"。
+## 一、预训练与后训练的目标
 
-本篇讲的就是如何让模型从"会写"变成"会答"。
+自回归预训练通常最小化下一个 token 的负对数概率：
 
----
+$$\mathcal{L}_{PT}=-\frac{1}{T}\sum_{t=1}^{T}\log P(x_t\mid x_{<t};\theta)$$
 
-## 一、预训练模型为什么不会回答问题
+模型由此学习语言、知识和数据中的各种模式。但训练语料的后续文本不一定是在执行用户指令：一个问题后面可能接答案，也可能接另一个问题或一段评论。因此，续写能力并不自动等于稳定的指令遵循能力。
 
-预训练的目标是预测下一个 token。这个目标让模型学会了语言的统计规律，但没有教它什么是"好的回答"。
+后训练使用更贴近目标行为的数据与反馈。它能改善回答方式和任务表现，也仍然受信息来源限制。例如，客服模型要回答某个订单的到货时间，需要查询订单与物流数据；单靠对齐训练无法获得实时业务事实。
 
-你问它"我的订单什么时候到"，它会续写"我的订单什么时候到？这是一个常见的问题..."——因为它在训练数据里见过最多的就是这种"百科全书式"的写法。
+## 二、SFT：学习示范回答
 
-问题出在损失函数：
-
-$$\mathcal{L} = -\frac{1}{T}\sum_{t=1}^{T} \log P(x_t | x_1, \ldots, x_{t-1}; \theta)$$
-
-这个函数只关心"预测准不准"，不关心"回答好不好"。模型学会了语言的模式，但不知道人类想要什么样的回答。
-
-**核心洞察：** 预训练让模型学会了"怎么说"，但没有教它"说什么"。这是两个完全不同的能力。
-
-```mermaid
-graph LR
-    A["预训练目标<br/>预测下一个 token"] -->|结果| B["语言模式<br/>（会续写）"]
-    B -->|问题| C["不会回答问题<br/>只会百科全书式续写"]
-    C -->|解决| D["对齐<br/>教模型什么是好回答"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#fce4ec,stroke:#ef5350,color:#333
-    style D fill:#e8f5e9,stroke:#4caf50,color:#333
-```
-
----
-
-## 二、SFT：教模型模仿人类
-
-最直接的解决方案是：给模型看一批人类写好的回答，让它学会模仿。
-
-这就是 SFT（Supervised Fine-Tuning）。你收集一批 `(instruction, response)` 对，用监督学习微调模型。
+SFT（Supervised Fine-Tuning）使用指令与回答组成的样本。示范既可以由人撰写，也可以经过模型生成、筛选和校验。数据需要体现希望模型遵守的格式、信息范围和任务要求。
 
 ```python
-# SFT 数据：客服场景
 sft_example = {
-    "instruction": "我的订单什么时候到？",
-    "response": "您的订单预计明天到达。如有问题，请联系客服。"
+    "instruction": "用两句话解释 KV Cache。",
+    "response": "KV Cache 保存历史 token 在各层的 Key 和 Value。"
+                "生成后续 token 时可以复用这些状态，减少重复计算。"
 }
 ```
 
-SFT 的损失函数和预训练一样是交叉熵，但只在 response 部分计算：
+一种常见训练方式只在 assistant 回答上计算交叉熵，输入指令的 label 设为 `-100`。多轮对话中也可以在多个 assistant 片段上计算损失，具体由数据模板和训练配置决定。
+
+下面展示回答部分的损失计算，省略分词、数据加载和对话模板构造。`response_start` 是已组装序列中回答开始的位置，由同一套对话模板与分词流程确定。
 
 ```python
-def sft_loss(model, instruction, response):
-    input_ids = tokenize(instruction + response)
+import torch.nn.functional as F
+
+def response_loss(logits, input_ids, response_start):
+    # logits: [batch, sequence, vocab]
     labels = input_ids.clone()
-    labels[:len(tokenize(instruction))] = -100  # 忽略 instruction 部分
-    
-    logits = model(input_ids)
-    loss = nn.CrossEntropyLoss()(logits.view(-1, vocab_size), labels.view(-1))
-    return loss
+    labels[:, :response_start] = -100
+    # 位置 t 的输出预测位置 t+1 的 token
+    return F.cross_entropy(
+        logits[:, :-1].reshape(-1, logits.size(-1)),
+        labels[:, 1:].reshape(-1),
+        ignore_index=-100,
+    )
 ```
 
-为什么 instruction 部分的 loss 要忽略？因为 instruction 是输入，不是模型要学习的输出。模型只需要学会"看到这个 instruction 后，生成这个 response"。
+示范质量、任务覆盖与样本数量共同影响效果。少量精选数据可能有效调整已有行为；扩大任务范围时，还需增加相应示范与覆盖。
 
-**认知反转：** SFT 的效果取决于数据质量，不是数量。LIMA 论文用 1000 条高质量数据就达到了不错的效果。这说明模型在预训练阶段已经学到了足够的知识，SFT 只是教它"怎么说"。
+SFT 直接提高示范回答的概率。若希望利用同一问题下“哪个回答更好”的比较，还需要引入偏好数据。
 
-但 SFT 有个根本问题：它只能模仿，不能选择。
+## 三、RLHF：用偏好训练奖励模型
+
+以 PPO 为优化算法的一类 RLHF 流程，通常包括收集偏好、训练奖励模型和策略优化三个步骤。
+
+先对同一输入采样多个回答，由标注者按准确性、相关性等标准比较。例如，“两句话解释 KV Cache”的偏好样本，可以把准确且满足长度要求的回答放在含错误机制或严重偏题的回答之前。标注准则应明确这些要求，让同类回答的比较保持一致。
+
+奖励模型 $r_\phi(x,y)$ 为输入与回答打分。若 $y_w$ 优于 $y_l$，常见成对损失为：
+
+$$\mathcal{L}_{RM}=-\mathbb{E}\log\sigma\big(r_\phi(x,y_w)-r_\phi(x,y_l)\big)$$
+
+随后策略模型生成新回答，用奖励模型评分并更新。常见的正则化目标为：
+
+$$J(\theta)=\mathbb{E}_{x,y\sim\pi_\theta}[r_\phi(x,y)]-\beta\mathbb{E}_{x}\,D_{KL}\big(\pi_\theta(\cdot\mid x)\|\pi_{ref}(\cdot\mid x)\big)$$
+
+这里写的是奖励与 KL 惩罚组成的目标，并非 PPO 的完整 clipped surrogate loss。PPO 还需要用优势估计、概率比和裁剪机制约束每轮更新。
+
+奖励模型只是人类偏好的近似。策略可能利用评分漏洞获得高分，却没有改善实际回答，这类问题称为 reward hacking。KL 惩罚可以限制相对参考策略的偏移，但不能保证消除奖励漏洞，奖励质量和更新方式仍需单独检查。
 
 ```mermaid
-graph LR
-    A["预训练模型<br/>（会续写）"] -->|SFT| B["SFT 模型<br/>（会回答）"]
-    B -->|问题| C["不知道哪个回答更好"]
-    C -->|解决| D["需要人类偏好"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#fce4ec,stroke:#ef5350,color:#333
-    style D fill:#e8f5e9,stroke:#4caf50,color:#333
+flowchart LR
+    A[同一输入的多个回答] --> B[人工偏好比较]
+    B --> C[训练奖励模型]
+    C --> D[为新采样回答评分]
+    D --> E[PPO 更新策略]
+    E --> D
 ```
 
----
+典型 PPO-RLHF 实现涉及策略、参考策略、奖励模型和价值模型。它们可能共享部分结构或采用不同的部署方式，但生成、评分、价值估计与更新仍带来较大的显存和调度成本。
 
-## 三、RLHF：让人类告诉模型哪个更好
+## 四、DPO：直接利用偏好对
 
-SFT 只教了模仿，没有教选择。同一个问题可能有多个回答，哪个更好？
+DPO（Direct Preference Optimization）从 KL 正则化奖励最大化问题推导出直接优化策略的偏好损失，无需单独拟合显式奖励模型，再运行 PPO 循环。
 
-```python
-prompt = "我的订单什么时候到？"
+$$\mathcal{L}_{DPO}=-\mathbb{E}_{(x,y_w,y_l)}\log\sigma\left(\beta\log\frac{\pi_\theta(y_w\mid x)}{\pi_{ref}(y_w\mid x)}-\beta\log\frac{\pi_\theta(y_l\mid x)}{\pi_{ref}(y_l\mid x)}\right)$$
 
-response_a = "您的订单预计明天到达。"
-response_b = "您的订单预计明天到达。如有问题，请联系客服。"
-response_c = "您的订单什么时候到？这是一个常见的问题。订单的到达时间取决于多个因素..."
+式中比较的是两个回答相对于参考策略的对数概率变化。训练提高偏好回答相对非偏好回答的优势；它不要求每个偏好回答的绝对概率都单调增加。
 
-# 哪个更好？SFT 无法判断
-# 需要人类告诉模型：response_b > response_a > response_c
-```
+参考策略提供固定的比较基准，使目标由偏好对与相对策略概率共同决定。与奖励模型加 PPO 的流程相比，DPO 直接从同类偏好数据构造策略损失，减少了独立评分与在线优化环节。
 
-RLHF（Reinforcement Learning from Human Feedback）的核心思想是：让人类告诉模型"哪个回答更好"，然后用强化学习优化模型。
+标准离线 DPO 使用已有偏好数据，不在每轮更新中重新采样。它的工程流程较简单，但数据覆盖不足、偏好噪声和分布偏移仍会影响结果。需要在线探索时，可以另外组织采样与反馈循环。
 
-**三步流程：**
+## 五、GRPO：用组内奖励估计优势
 
-**第一步：收集偏好数据**
+[DeepSeekMath](https://arxiv.org/abs/2402.03300) 提出了 GRPO（Group Relative Policy Optimization），随后用于 DeepSeek-R1 等工作。它对同一输入采样一组回答，以组内奖励的统计量构造优势估计，省去单独训练的价值模型。
 
-对同一个 prompt，让模型生成多个回答，人工排序。
+一种常见形式为：
 
-```python
-prompt = "我的订单什么时候到？"
-responses = [
-    "您的订单预计明天到达。",
-    "您的订单预计明天到达。如有问题，请联系客服。",
-    "您的订单什么时候到？这是一个常见的问题..."
-]
-# 人工排序：response_b > response_a > response_c
-preferences = [
-    (responses[1], responses[0]),  # response_b 优于 response_a
-    (responses[1], responses[2]),  # response_b 优于 response_c
-    (responses[0], responses[2]),  # response_a 优于 response_c
-]
-```
+$$A_i=\frac{r_i-\operatorname{mean}(r)}{\operatorname{std}(r)+\epsilon}$$
 
-**第二步：训练 Reward Model**
-
-用偏好数据训练一个打分模型 $r_\phi(x, y)$。这个模型学会预测人类偏好：给一个 (prompt, response) 对，输出一个分数。
-
-```python
-class RewardModel(nn.Module):
-    def __init__(self, base_model):
-        super().__init__()
-        self.base_model = base_model
-        self.reward_head = nn.Linear(hidden_dim, 1)
-    
-    def forward(self, input_ids):
-        hidden = self.base_model(input_ids)[:, -1, :]  # 取最后一个 token
-        reward = self.reward_head(hidden)
-        return reward
-
-# 训练：让偏好回答的分数高于被拒绝回答
-def reward_loss(rm, prompt, preferred, rejected):
-    preferred_reward = rm(tokenize(prompt + preferred))
-    rejected_reward = rm(tokenize(prompt + rejected))
-    loss = -torch.log(torch.sigmoid(preferred_reward - rejected_reward))
-    return loss
-```
-
-**第三步：PPO 优化策略**
-
-用 Reward Model 的打分来优化语言模型。但不能直接最大化 reward——那样模型可能会生成"讨好" Reward Model 的回答，而不是真正好的回答。所以要用 KL 散度约束，让模型不要偏离 SFT 模型太远。
-
-$$\mathcal{L}_{\text{PPO}} = \mathbb{E}_{y \sim \pi_\theta}\left[r_\phi(x, y) - \beta \text{KL}(\pi_\theta \| \pi_{\text{ref}})\right]$$
-
-这个公式里：
-- $r_\phi(x, y)$：Reward Model 的打分，告诉模型"这个回答有多好"
-- $\beta \text{KL}(\pi_\theta \| \pi_{\text{ref}})$：KL 散度惩罚，防止模型偏离 SFT 模型太远
-
-如果删掉 KL 项会怎样？模型会生成"讨好" Reward Model 的回答——可能语法正确、逻辑通顺，但不是人类真正想要的。这就是所谓的"reward hacking"。
+高于组内平均奖励的回答获得正优势，低于平均的获得负优势。这里使用奖励数值的标准化，并非只看排名。奖励既可以由规则提供，也可以来自奖励模型；GRPO 本身不规定奖励来源。
 
 ```mermaid
-graph TD
-    A["同一 prompt"] -->|生成| B["多个回答"]
-    B -->|人工排序| C["偏好数据"]
-    C -->|训练| D["Reward Model"]
-    D -->|打分| E["PPO 优化"]
-    E -->|更新| F["对齐模型"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#f0f4ff,stroke:#5b8def,color:#333
-    style D fill:#f0f4ff,stroke:#5b8def,color:#333
-    style E fill:#fce4ec,stroke:#ef5350,color:#333
-    style F fill:#e8f5e9,stroke:#4caf50,color:#333
+flowchart LR
+    A[同一输入] --> B[采样 G 个回答]
+    B --> C[计算每个回答的奖励]
+    C --> D[组内归一化优势]
+    D --> E[带概率比裁剪的策略更新]
 ```
 
-**RLHF 的问题：** 需要维护 4 个模型（Policy, Reference, Reward, Value），显存开销大，工程复杂。训练时需要同时跑 4 个模型的前向传播，对硬件要求很高。
+省去价值模型降低了部分训练成本，但组采样仍然需要生成多条回答。采样数量、回答长度和奖励方差会共同影响效率。如果组内奖励完全相同，归一化后的优势为零，这一组就没有基于奖励差异的策略梯度信号。KL 等其他目标项仍可提供梯度。
 
-ChatGPT 就是用 RLHF 训练的。但 OpenAI 有大量 GPU 资源，普通团队很难复现。有没有更简洁的方案？
+## 六、DAPO：调整采样与更新细节
 
----
+[DAPO](https://arxiv.org/abs/2503.14476) 的名称来自 Decoupled Clip and Dynamic sAmpling Policy Optimization。它针对大规模推理强化学习中的探索、有效样本比例和长回答训练等问题调整策略优化流程。
 
-## 四、DPO：去掉 Reward Model
+- **Clip-Higher**：将概率比裁剪的上、下界解耦，放宽上界，给低概率动作的概率增长留出更多空间。
+- **Dynamic Sampling**：过滤组内奖励没有差异的输入，并继续采样以补足有效批次。同一题目在策略变化后，也可能重新产生有差异的奖励。
+- **Token-level Policy Gradient Loss**：在批次内按有效 token 聚合并归一化。与先在每条序列内平均、再对序列平均相比，较长回答在总目标中有更大的 token 权重。
+- **Overlong Reward Shaping**：处理长度截断引入的奖励噪声，并在接近长度上限时引入软惩罚。这有助于区分错误答案与被长度上限截断的未完成推理。
 
-RLHF 的复杂性主要来自 Reward Model 的训练和 PPO 的优化。DPO（Direct Preference Optimization）的核心 insight 是：可以绕过 Reward Model，直接从偏好数据优化策略。
+这些改动需要结合采样实现与损失归一化理解。只复制一个裁剪阈值，无法复现整套训练行为。
 
-这个 insight 来自一个数学推导：RLHF 的最优解可以重写为一个简单的分类损失。
+## 七、RLVR：奖励由验证器提供
 
-DPO 的损失函数：
-
-$$\mathcal{L}_{\text{DPO}} = -\mathbb{E}_{(x, y_w, y_l)}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right]$$
-
-其中 $y_w$ 是偏好回答，$y_l$ 是被拒绝回答。
-
-这个公式里：
-- $\log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}$：策略模型相对于参考模型对偏好回答的"偏好程度"
-- $\log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}$：策略模型相对于参考模型对被拒绝回答的"偏好程度"
-- 两者相减：让模型更倾向于生成偏好回答，远离被拒绝回答
-
-如果删掉参考模型的 log 概率会怎样？模型会直接最大化偏好回答的概率，忽略与参考模型的差异。这会导致模型生成"奇怪"的回答——虽然概率高，但不是人类想要的。
-
-**核心洞察：** DPO 的本质是让模型学习"相对偏好"，而不是"绝对好坏"。这比 RLHF 更稳定，因为相对偏好比绝对打分更容易标注。
-
-```mermaid
-graph LR
-    A["RLHF<br/>4 个模型"] -->|简化| B["DPO<br/>2 个模型"]
-    B -->|去掉| C["Reward Model"]
-    C -->|结果| D["训练更简单"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#fce4ec,stroke:#ef5350,color:#333
-    style D fill:#e8f5e9,stroke:#4caf50,color:#333
-```
-
-DPO 是离线方法，只能从已有的偏好数据学习。有没有在线方法，让模型在训练过程中自己探索？
-
----
-
-## 五、GRPO：让模型自己探索
-
-DPO 的局限是它只能从已有的偏好数据学习。DeepSeek-R1 提出了 GRPO（Group Relative Policy Optimization），让模型在训练过程中自己生成回答，然后组内比较。
-
-**核心思想：** 对每个 prompt 采样 G 个回答，用组内相对排名估计优势：
-
-$$\text{Advantage}_i = \frac{r_i - \text{mean}(r)}{\text{std}(r)}$$
-
-这个公式的含义是：一个回答的好坏不是绝对的，而是相对于同组其他回答的。如果一个回答比组内平均好，它的 advantage 就是正的；反之就是负的。
-
-**认知反转：** GRPO 去掉了 Critic（Value Model），用组内相对比较代替绝对打分。这让训练更简单，显存需求更低。DeepSeek-R1 用 GRPO 训练出了强大的推理能力，证明了这种方法的有效性。
-
-```mermaid
-graph TD
-    A["同一 prompt"] -->|采样| B["G 个回答"]
-    B -->|打分| C["G 个奖励"]
-    C -->|组内归一化| D["相对优势"]
-    D -->|优化| E["策略更新"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#f0f4ff,stroke:#5b8def,color:#333
-    style D fill:#fce4ec,stroke:#ef5350,color:#333
-    style E fill:#e8f5e9,stroke:#4caf50,color:#333
-```
-
----
-
-## 六、DAPO：工业级改进
-
-GRPO 在工业实践中遇到了新问题：某些 prompt 的所有回答都对或都错，无法提供有效梯度。
-
-举个例子：假设一个简单的数学题 "1+1=?"，模型生成的 8 个回答全是 "2"。所有回答的奖励都一样，advantage 全是 0，梯度为 0，模型无法从这个 prompt 学到任何东西。
-
-DAPO（Dynamic Sampling Policy Optimization）解决了这个问题。
-
-**四个关键技术：**
-
-**Clip-Higher：** 放宽正 Advantage 的 clipping 上界，鼓励探索。PPO 的 clipping 会限制策略更新幅度，但 DAPO 发现对正 Advantage 放宽限制可以让模型更积极地探索好的回答。
-
-**Dynamic Sampling：** 过滤全对/全错的 prompt。如果一个 prompt 的所有回答都对或都错，说明这个 prompt 对当前模型没有学习价值，直接跳过。
-
-**Overlong Filtering：** 超长回答 reward 设为 0（非负奖励），避免惩罚短回答。有些模型会生成很长的回答来"凑"奖励，DAPO 通过设置长度上限来避免这个问题。
-
-**Token-level Loss：** 按 token 计算损失，避免长序列被过度加权。传统方法按 sequence 计算 loss，长序列的梯度会更大。DAPO 改为按 token 计算，让每个 token 的贡献相等。
-
-```mermaid
-graph LR
-    A["GRPO 问题"] -->|全对/全错| B["无有效梯度"]
-    B -->|解决| C["Dynamic Sampling"]
-    C -->|过滤| D["有效训练样本"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#fce4ec,stroke:#ef5350,color:#333
-    style C fill:#f0f4ff,stroke:#5b8def,color:#333
-    style D fill:#e8f5e9,stroke:#4caf50,color:#333
-```
-
----
-
-## 七、RLVR：可验证领域的对齐
-
-前面的对齐方法都需要人类标注或学习得到的奖励模型。在数学、代码等可验证领域，可以用基于规则的确定性验证器提供奖励。
-
-**数学验证：**
+RLVR（Reinforcement Learning with Verifiable Rewards）描述奖励的获取方式。在数学、代码等领域，系统可以比较最终答案或运行测试，为采样结果提供自动反馈。它可以与 GRPO 等策略优化算法组合使用。
 
 ```python
-def math_verifier(question, response):
-    """数学验证器"""
-    # 从 response 中提取答案
-    extracted_answer = extract_answer(response)
-    # 与标准答案比较
-    ground_truth = get_ground_truth(question)
-    return 1.0 if extracted_answer == ground_truth else 0.0
-```
-
-**代码验证：**
-
-```python
-def code_verifier(question, response):
-    """代码验证器"""
-    # 提取代码
-    code = extract_code(response)
-    # 在沙箱中运行测试用例
-    test_cases = get_test_cases(question)
-    for input_data, expected_output in test_cases:
-        actual_output = run_in_sandbox(code, input_data)
-        if actual_output != expected_output:
+def code_reward(code, test_cases, run_in_sandbox):
+    """接口示意：沙箱负责超时、资源限制及错误隔离。"""
+    for input_data, expected in test_cases:
+        if run_in_sandbox(code, input_data) != expected:
             return 0.0
     return 1.0
 ```
 
-RLVR 的好处是：不需要人类标注，奖励信号完全自动化。这使得训练可以大规模扩展，不需要昂贵的人工标注。
+自动验证减少了逐条人工比较回答的成本，但题目、标准答案和测试用例仍需构建与检查。通过有限测试不等于程序在所有输入上正确，奖励设计还需要防止格式投机、测试泄露和验证器漏洞。
 
-DeepSeek-R1 使用 RLVR + GRPO 训练，模型自发涌现出自我反思、多路径探索等推理行为。这说明 RLVR 不仅能提升准确性，还能激发模型的推理能力。
+[DeepSeek-R1 报告](https://arxiv.org/abs/2501.12948) 中，R1 的主要阶段包括冷启动数据微调、面向推理的强化学习、拒绝采样与再次 SFT，以及覆盖更广场景的强化学习。报告还讨论了向小模型蒸馏。R1-Zero 用于研究不经冷启动直接强化学习的行为，蒸馏模型则通过大模型生成的样本训练；三者的数据与阶段应分别理解。
 
-**DeepSeek-R1 的完整流程：**
-1. **SFT 冷启动：** 用含思维链的指令数据微调，学会格式与基础推理
-2. **RL 推理训练 (RLVR)：** 在数学、代码等可验证领域用 GRPO/DAPO 训练
-3. **偏好对齐：** 用 DPO 或 RLHF 进行最终对齐
-4. **蒸馏（可选）：** 用大模型生成推理数据，蒸馏至小模型
-
----
-
-回到开篇的问题："我的订单什么时候到？"
-
-预训练模型会续写，SFT 模型会回答，RLHF/DPO 模型会选择好的回答，GRPO/DAPO 模型会优化回答，RLVR 模型会推理后回答。
-
-对齐方法的演进遵循同一模式：从模仿到选择，从离线到在线，从人工标注到自动验证。
-
-```mermaid
-graph LR
-    A["预训练模型<br/>（会续写）"] -->|SFT| B["指令遵循模型<br/>（会回答）"]
-    B -->|RLHF/DPO| C["对齐模型<br/>（会选择）"]
-    C -->|GRPO/DAPO| D["探索模型<br/>（会优化）"]
-    D -->|RLVR| E["推理模型<br/>（会思考）"]
-
-    style A fill:#fff8e1,stroke:#ff9800,color:#333
-    style B fill:#f0f4ff,stroke:#5b8def,color:#333
-    style C fill:#f0f4ff,stroke:#5b8def,color:#333
-    style D fill:#e8f5e9,stroke:#4caf50,color:#333
-    style E fill:#fce4ec,stroke:#ef5350,color:#333
-```
-
-![对齐方法演进：从 SFT 到 RLVR 的完整路径](/assets/llm-alignment/alignment-evolution.png)
-
-每一步改进都在解决前一步的问题：SFT 解决了"会回答"，RLHF 解决了"会选择"，DPO 去掉了 Reward Model，GRPO 去掉了 Critic，DAPO 解决了工业实践问题，RLVR 解决了标注成本问题。
+实际设计后训练流程时，先确定反馈从哪里来：有可靠示范，可以做 SFT；有回答间的偏好，可以做偏好优化；有可执行的验证器，可以考虑 RLVR。之后再根据采样成本、硬件与训练稳定性选择优化算法。模型是否回答得更好，最终仍要由目标任务评估确认。
