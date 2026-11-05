@@ -1,0 +1,637 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 PD 分离到 EPD 分离：多模态大模型推理架构的演进 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="同样是一次问答，输入一段文字与输入多张高清图片，会给推理服务带来不同的负载。图片需要先完成解码、预处理和视觉编码，生成的视觉表示还会增加语言模型的输入长度。如果这些工作与文本生成共用资源，图片请求的到来就可能改变其他请求的排队时间和输出节奏。 PD 分离将 Prefill 与 Decode 放到不同实例上，分别处理输入与生成输出。多模态场景进一步引入了 Encode 阶段，形成 Encode–Pr">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进">
+<meta property="og:url" content="https://wrygill.github.io/2026/11/04/epd-disaggregation/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="同样是一次问答，输入一段文字与输入多张高清图片，会给推理服务带来不同的负载。图片需要先完成解码、预处理和视觉编码，生成的视觉表示还会增加语言模型的输入长度。如果这些工作与文本生成共用资源，图片请求的到来就可能改变其他请求的排队时间和输出节奏。 PD 分离将 Prefill 与 Decode 放到不同实例上，分别处理输入与生成输出。多模态场景进一步引入了 Encode 阶段，形成 Encode–Pr">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_2.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-05T13:51:18.096Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="推理优化">
+<meta property="article:tag" content="AI-Infra">
+<meta property="article:tag" content="多模态">
+<meta property="article:tag" content="EPD">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_2.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 PD 分离到 EPD 分离：多模态大模型推理架构的演进",
+  "url": "https://wrygill.github.io/2026/11/04/epd-disaggregation/",
+  "image": "https://wrygill.github.io/img/miku_cover_2.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-05T13:51:18.096Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/11/04/epd-disaggregation/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 PD 分离到 EPD 分离：多模态大模型推理架构的演进',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_2.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">从 PD 分离到 EPD 分离：多模态大模型推理架构的演进</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">从 PD 分离到 EPD 分离：多模态大模型推理架构的演进</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-05T13:51:18.096Z" title="更新于 2026-11-05 21:51:18">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infrastructure/">AI Infrastructure</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>同样是一次问答，输入一段文字与输入多张高清图片，会给推理服务带来不同的负载。图片需要先完成解码、预处理和视觉编码，生成的视觉表示还会增加语言模型的输入长度。如果这些工作与文本生成共用资源，图片请求的到来就可能改变其他请求的排队时间和输出节奏。</p>
+<p>PD 分离将 Prefill 与 Decode 放到不同实例上，分别处理输入与生成输出。多模态场景进一步引入了 Encode 阶段，形成 Encode–Prefill–Decode 三阶段链路。EPD 分离围绕这三个阶段划分调度和资源边界，让系统可以单独调整编码、输入处理和生成能力。</p>
+<p>下面以视觉编码器连接自回归语言模型的图片理解架构为例，讨论执行流程、部署方式及其工程取舍。这里的 E 指多模态 Encode；纯文本请求的分词和词嵌入查表不单独构成本文的 E 阶段。</p>
+<h2 id="一、多模态推理链路">一、多模态推理链路</h2>
+<p>假设用户上传两张图片，并要求模型比较其中的差异。服务首先读取图片、解码并执行缩放、裁剪等预处理，再把结果交给视觉编码器。编码器输出经过必要的投影或合并后，形成语言模型可以消费的 embeddings。投影放在编码侧还是语言模型侧，取决于模型与服务实现。</p>
+<p>这部分是 <strong>Encode</strong>。图片数量、分辨率及切图策略会影响编码工作量，因此两条文本长度相同的请求，也可能有很不一样的编码耗时。</p>
+<p>接着进入 <strong>Prefill</strong>。语言模型按照模型约定，将文本表示与视觉表示组织成输入序列，执行前向计算，建立各层的 KV Cache，并得到预测首个输出 token 所需的 logits。视觉表示占据多少输入位置，由模型的压缩、合并和序列组织方式决定。</p>
+<p><strong>Decode</strong> 则接续已有 KV，逐步生成输出。每一步读取模型权重和已有上下文状态，计算新 token，并追加对应的 KV。本文讨论普通自回归路径，暂不展开推测解码等变体。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    I[&quot;两张图片&quot;] --&gt; M[&quot;解码与预处理&quot;]
+    M --&gt; E[&quot;Encode&lt;br&#x2F;&gt;视觉编码与表示转换&quot;]
+    E --&gt;|&quot;视觉 embeddings&quot;| P[&quot;Prefill&lt;br&#x2F;&gt;处理输入并建立 KV&quot;]
+    T[&quot;文本问题&quot;] --&gt;|&quot;文本 token&quot;| P
+    P --&gt;|&quot;KV 与生成状态&quot;| D[&quot;Decode&lt;br&#x2F;&gt;逐步生成输出&quot;]
+    D --&gt; O[&quot;流式回答&quot;]
+  </pre></div>
+<p>图中箭头表示数据依赖，并不要求每个方框都部署为独立服务。媒体预处理可以放在前端或编码 worker；图片解码与语言模型的 Decode 也属于两种不同操作。</p>
+<p>三个阶段关注的资源不同。Encode 通常有较强的矩阵计算需求，也会产生临时激活；Prefill 一次处理多个输入位置，适合组织较大的矩阵运算；Decode 每一步处理的新增位置较少，在小批量下常受权重与 KV 的访存限制。批量、上下文长度、模型结构和并行度都会改变实际瓶颈，不能仅凭阶段名称判断硬件利用率。</p>
+<h2 id="二、PD-分离的局限">二、PD 分离的局限</h2>
+<p>在共置服务中，长输入的 Prefill 可能占用较长执行时间，影响正在流式生成的请求。PD 分离把输入处理与持续生成交给不同实例，让两侧分别选择批处理、并行度和资源数量。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2401.09670">DistServe</a> 系统性讨论了这类干扰，以及按首 token 延迟和输出 token 延迟配置资源的方法。</p>
+<p>但在多模态服务中，如果编码仍由 Prefill 实例承担，部署形态实际上是 EP/D。P 与 D 之间已经隔离，E 与 P 之间仍然共享调度和资源。</p>
+<p>这种耦合会带来两类问题。第一类是执行干扰：编码耗时随图片负载波动。当实现把图片编码放在同一执行路径上时，文本请求也可能等待前面的图片任务完成。独立编码可以减少这部分等待，但是否发生整批阻塞，仍取决于具体引擎的调度实现。</p>
+<p>第二类是资源配置受限。视觉编码器权重、编码激活与语言模型的权重、输入处理共用显存；编码吞吐不足时，增加一个 EP 实例往往还要增加一份语言模型资源。若此时语言模型侧已经有余量，这次扩容就难以充分利用。</p>
+<p>Chunked Prefill 等机制可以缓解长 Prefill 对 Decode 的干扰，却不会自动建立独立的编码资源池。是否继续拆分 E，需要看编码是否已经成为可以观测到的瓶颈。</p>
+<h2 id="三、EPD-分离架构">三、EPD 分离架构</h2>
+<p>为便于区分，下面用斜杠表示实例边界：</p>
+<table>
+<thead>
+<tr>
+<th>部署形态</th>
+<th>实例职责</th>
+<th>新增的跨实例交接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EPD 共置</td>
+<td>同一实例执行三个阶段</td>
+<td>无阶段间远程交接</td>
+</tr>
+<tr>
+<td>EP/D</td>
+<td>编码与 Prefill 结合，Decode 独立</td>
+<td>KV 与生成状态</td>
+</tr>
+<tr>
+<td>E/PD</td>
+<td>编码独立，Prefill 与 Decode 结合</td>
+<td>多模态 embeddings</td>
+</tr>
+<tr>
+<td>E/P/D</td>
+<td>三个阶段分别部署</td>
+<td>embeddings、KV 与生成状态</td>
+</tr>
+</tbody>
+</table>
+<p>EPD 分离的实现可以从 E/PD 开始，也可以进一步采用 E/P/D。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/dynamo/dev/multimodal/encoder-disaggregation">Dynamo 编码分离文档</a> 给出了这两种部署路径。worker 的逻辑分离与 GPU 的物理隔离需要分别考虑：独立进程可以共享 GPU，获得各自的队列和批处理能力，但仍会争用计算与显存带宽。</p>
+<p>完整的 E/P/D 请求大致经过以下过程：前端解析请求，编码池处理图片并发布 embeddings；Prefill 实例取得这些表示，与文本输入一起执行前向计算；Decode 实例取得 KV 和生成状态后，继续生成回答。纯文本请求直接进入 P/D 路径。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart TB
+    F[&quot;前端与请求路由&quot;] --&gt;|&quot;图片任务&quot;| E[&quot;Encode 资源池&quot;]
+    F --&gt;|&quot;文本与多模态位置元数据&quot;| P[&quot;Prefill 资源池&quot;]
+    E --&gt;|&quot;embeddings 与就绪通知&quot;| P
+    P --&gt;|&quot;KV 与生成状态&quot;| D[&quot;Decode 资源池&quot;]
+    D --&gt;|&quot;增量输出&quot;| F
+  </pre></div>
+<p>这张图描述逻辑依赖。实际系统可能由前端等待编码完成后再转发请求，也可能先选择下游实例，由下游协调编码。两种方式都需要明确中间结果的位置、就绪状态及释放责任。</p>
+<p>两次交接传递的数据不同。E → P 交接的是编码输出，还需要保留图片顺序、切图布局和输入位置等模型所需的元数据。P → D 交接的是各层 KV，以及接续生成所需的 token、位置和采样状态等信息。KV 布局、数据类型及并行分片方式也必须兼容，或由传输层完成转换。</p>
+<p><a target="_blank" rel="noopener" href="https://docs.vllm.ai/en/latest/examples/disaggregated/disaggregated_encoder/">vLLM 的分离示例</a> 分别配置 Encoder Cache Connector 与 KV Connector，体现了这两个数据边界。它们不必使用相同的传输后端；部署前还需确认具体版本对模型、模态、拓扑和 connector 组合的支持。</p>
+<h2 id="四、性能收益">四、性能收益</h2>
+<p>分离后的直接变化，是各阶段拥有独立的工作队列和资源配置。编码池可以按图片负载组织 batch；Prefill 池根据输入 token 数安排工作；Decode 池根据活跃序列、KV 容量和输出延迟调节并发。调度器因而不必在同一个执行批次里兼顾所有阶段。</p>
+<p>由此可以形成跨请求流水线：请求 A 进入 Decode 时，请求 B 执行 Prefill，请求 C 执行 Encode。它提高了不同阶段同时工作的机会，但请求 C 仍要等待自身所需的视觉表示就绪，才能处理对应的多模态输入。单请求延迟与系统吞吐需要分别衡量。</p>
+<p>对于包含多张独立图片的请求，编码任务还可以分发到多个 worker 并行执行，再按原始顺序汇合。单张图片内部能否进一步按切图并行，要遵循编码器结构，不能任意切断存在全局注意力依赖的输入。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2501.05460">EPD 原始论文</a> 将异步传输、请求内编码并行和资源配置优化组合起来，改善整条服务链路。</p>
+<p>显存方面，真正只加载编码器的 E 实例可以省去语言模型权重；P/D 侧可以移除编码器权重及相应的临时激活。这有机会为更大的 batch 或 KV 池腾出空间。不过，视觉位置对应的语言模型 KV 仍然存在，分离不会让它们消失。</p>
+<p>缓存还能减少重复编码。同一图片在相同模型、预处理与表示转换配置下，可以复用已有 embeddings。编码缓存也可以用于共置服务，EPD 分离只是让集中管理和跨实例复用更容易。命中编码缓存后，新的文本上下文通常仍要执行 Prefill；能否复用 KV，取决于完整前缀是否满足复用条件。</p>
+<p>这些收益最终要落到固定成本下的吞吐和延迟上。如果编码本来只占很小一部分时间，增加独立队列和数据传输后，收益也可能被抵消。</p>
+<h2 id="五、工程代价">五、工程代价</h2>
+<p><strong>通信量是首先需要估算的成本。</strong> 若编码侧最终输出 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>V</mi></mrow><annotation encoding="application/x-tex">V</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.2222em;">V</span></span></span></span></eq> 个视觉位置，每个位置的维度为 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>d</mi></mrow><annotation encoding="application/x-tex">d</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">d</span></span></span></span></eq>、每元素占 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>b</mi></mrow><annotation encoding="application/x-tex">b</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">b</span></span></span></span></eq> 字节，则一次 E → P 交接的张量大小约为：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>S</mi><mrow><mi>E</mi><mi>P</mi></mrow></msub><mo>=</mo><mi>V</mi><mi>d</mi><mi>b</mi></mrow><annotation encoding="application/x-tex">S_{EP}=Vdb</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0576em;">S</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0576em;">E</span><span class="mord mathnormal mtight" style="margin-right:0.1389em;">P</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal" style="margin-right:0.2222em;">V</span><span class="mord mathnormal">d</span><span class="mord mathnormal">b</span></span></span></span></span></eqn></section><p>例如，假设每张图片输出 1024 个位置、维度为 4096、采用每元素 2 字节的表示，则每张图片为 8 MiB，四张图片为 32 MiB。这是独立算例，不对应某个模型的默认配置；投影前后的维度与传输量也可能不同。</p>
+<p>对各层结构相同、使用普通 KV Cache 的模型，若有 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>L</mi></mrow><annotation encoding="application/x-tex">L</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal">L</span></span></span></span></eq> 层、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq> 个输入位置、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>H</mi><mrow><mi>K</mi><mi>V</mi></mrow></msub></mrow><annotation encoding="application/x-tex">H_{KV}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0813em;">H</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0813em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0715em;">K</span><span class="mord mathnormal mtight" style="margin-right:0.2222em;">V</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq> 个 KV head、每个 head 的维度为 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>d</mi><mi>h</mi></msub></mrow><annotation encoding="application/x-tex">d_h</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">h</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq>，每元素占 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>b</mi><mrow><mi>K</mi><mi>V</mi></mrow></msub></mrow><annotation encoding="application/x-tex">b_{KV}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0715em;">K</span><span class="mord mathnormal mtight" style="margin-right:0.2222em;">V</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq> 字节，则完整输入 KV 大小约为：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>S</mi><mrow><mi>P</mi><mi>D</mi></mrow></msub><mo>=</mo><mn>2</mn><mi>L</mi><mi>N</mi><msub><mi>H</mi><mrow><mi>K</mi><mi>V</mi></mrow></msub><msub><mi>d</mi><mi>h</mi></msub><msub><mi>b</mi><mrow><mi>K</mi><mi>V</mi></mrow></msub></mrow><annotation encoding="application/x-tex">S_{PD}=2LNH_{KV}d_hb_{KV}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0576em;">S</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.1389em;">P</span><span class="mord mathnormal mtight" style="margin-right:0.0278em;">D</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord">2</span><span class="mord mathnormal">L</span><span class="mord mathnormal" style="margin-right:0.109em;">N</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0813em;">H</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0813em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0715em;">K</span><span class="mord mathnormal mtight" style="margin-right:0.2222em;">V</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathnormal">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">h</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0715em;">K</span><span class="mord mathnormal mtight" style="margin-right:0.2222em;">V</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>其中 2 代表 K 和 V。假设 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>L</mi><mo>=</mo><mn>32</mn></mrow><annotation encoding="application/x-tex">L=32</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal">L</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">32</span></span></span></span></eq>、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi><mo>=</mo><mn>4096</mn></mrow><annotation encoding="application/x-tex">N=4096</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">4096</span></span></span></span></eq>、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>H</mi><mrow><mi>K</mi><mi>V</mi></mrow></msub><mo>=</mo><mn>8</mn></mrow><annotation encoding="application/x-tex">H_{KV}=8</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0813em;">H</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0813em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.0715em;">K</span><span class="mord mathnormal mtight" style="margin-right:0.2222em;">V</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">8</span></span></span></span></eq>、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>d</mi><mi>h</mi></msub><mo>=</mo><mn>128</mn></mrow><annotation encoding="application/x-tex">d_h=128</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">h</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">128</span></span></span></span></eq>，KV 每元素 2 字节，则总量为 512 MiB。这里的 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq> 包括进入语言模型序列的文本和视觉位置；算例按所有分片合计，忽略块填充、元数据和复制。压缩 KV、滑动窗口及其他注意力结构需要按实际布局重新计算。</p>
+<p>若有效传输带宽为 25 GB/s，32 MiB 与 512 MiB 的纯数据传输时间分别约为 1.34 ms 和 21.47 ms，尚未包含固定同步、复制及排队开销。这两个数只用于量级估算。前缀复用可以减少实际交接量，逐层传输与计算重叠可以缩短暴露在关键路径上的时间；并发请求也会争用同一条链路。</p>
+<p><strong>独立资源池还会增加权重副本与容量管理成本。</strong> P 与 D 通常都需要语言模型权重，因此完整 E/P/D 需要分别为两个资源池配置权重容量。减少某个实例的峰值显存，不代表集群总显存或 GPU 数量一定减少。异构硬件能否节约成本，也要同时计入吞吐、网络和部署密度。</p>
+<p><strong>背压决定流水线能否稳定运行。</strong> 编码完成得快，而 P 没有可用容量时，embeddings 会积压；P 持续接收请求，而 D 的 KV 池已满时，交接也会停住。只按上游队列长度扩容，可能进一步推高下游的内存占用。</p>
+<p>一种可行的控制方式，是在接收或推进请求前，结合下游预算限制在途任务，并对中间结果设置容量上限。对大小差异明显的多模态请求，只限制请求条数不够，还应估计视觉 token、KV 或字节占用。具体预留时机需要权衡：过早预留会让资源等待上游，过晚预留则可能形成积压。</p>
+<p><strong>中间状态需要明确的生命周期。</strong> 发送侧不能在异步传输完成前释放缓冲区；接收侧必须等数据可用后才启动依赖计算。请求取消或下游失败时，清理要覆盖编码任务、传输操作、embeddings 和 KV，避免只移除了前端请求却留下显存占用。</p>
+<p>若保留 embeddings 供后续复用，缓存键还应包含媒体内容身份、模型版本及预处理配置。同一个图片 URL 不能保证内容永远相同。缓存驻留与活跃请求引用也需要分开管理，避免淘汰仍被使用的数据。</p>
+<h2 id="六、性能评估">六、性能评估</h2>
+<p>评估应先固定比较口径。同一组 GPU 上比较，可以观察相同硬件预算下的收益；使用不同型号 GPU 时，应换算为相同费用下的有效吞吐。模型、权重与 KV 精度、输入输出长度、缓存条件及软件版本都应记录。</p>
+<p>对照组至少包含共置、E/PD 和 E/P/D。已有 EP/D 部署时，也应保留它，以区分“拆分编码”与“拆分 Prefill/Decode”各自贡献。共置基线需要使用合理的批处理和调度配置。</p>
+<p>负载应覆盖以下变化，而不只测试固定的一张图片：</p>
+<table>
+<thead>
+<tr>
+<th>负载维度</th>
+<th>需要观察的变化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>图片数量、分辨率与切图策略</td>
+<td>编码耗时、视觉 token 数和峰值显存</td>
+</tr>
+<tr>
+<td>文本输入长度</td>
+<td>Prefill 计算量和 KV 交接量</td>
+</tr>
+<tr>
+<td>输出长度</td>
+<td>Decode 占比及 KV 持续占用</td>
+</tr>
+<tr>
+<td>文本与图片请求比例</td>
+<td>混合流量下的排队干扰</td>
+</tr>
+<tr>
+<td>到达速率与突发程度</td>
+<td>队列增长、背压及尾部延迟</td>
+</tr>
+<tr>
+<td>编码缓存与前缀缓存命中率</td>
+<td>编码复用和 KV 复用的分别贡献</td>
+</tr>
+</tbody>
+</table>
+<p>客户端指标包括首 token 延迟 TTFT、输出 token 间隔 ITL、端到端延迟及其 P95/P99。平均 TPOT 可以描述生成阶段的平均速度，但会掩盖个别长间隔，因此还要检查逐 token 的停顿。</p>
+<p>首 token 由哪一侧返回也会改变指标解释。若 P 完成后就返回首 token，P → D 的交接可能主要表现为首 token 到第二个 token 的间隔；若由 D 统一返回，交接等待可能计入 TTFT。测试报告需要注明口径。</p>
+<p>有效吞吐可以定义为单位时间内同时满足既定 TTFT、输出延迟和成功条件的请求数。再按阶段记录排队、计算、传输、缓存命中与占用，才能解释吞吐变化的原因。提高到达速率时，还要确认队列没有持续增长；短时间内接收更多请求，并不能证明系统具备稳定处理能力。</p>
+<p>这一节给出评估方法，本文不提供实测提速比例。实际收益需要在目标模型、互联和请求分布下验证。</p>
+<h2 id="七、适用边界">七、适用边界</h2>
+<p>当多图、高分辨率输入较多，编码队列已经成为瓶颈，或者文本请求明显受到图片任务干扰时，可以优先评估 E/PD。它建立独立编码池，同时保留 P 与 D 的共置，减少一次 KV 远程交接。</p>
+<p>当 Prefill 与 Decode 的干扰同样突出，而且有足够的并发、互联带宽和独立扩容需求时，再评估完整 E/P/D。编码侧适合多大 batch、P/D 各需要多少实例，都应从阶段耗时与队列数据中确定，不能按三个阶段平均分卡。</p>
+<p>低并发、编码占比小或网络较慢时，共置往往更容易维持较短路径。输出很长、主要瓶颈集中在 Decode 时，单独扩展编码能力也难以显著改善端到端时间。若主要耗时发生在媒体下载和 CPU 预处理，首先需要处理的则是进入编码器之前的链路。</p>
+<p>EPD 分离提供了更细的资源配置能力，也增加了通信、状态和调度成本。合理的拆分粒度，应当让新增边界对应一个真实瓶颈，并通过相同成本下的有效吞吐与尾部延迟证明它的价值。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/11/04/epd-disaggregation/">https://wrygill.github.io/2026/11/04/epd-disaggregation/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86%E4%BC%98%E5%8C%96/">推理优化</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI-Infra</a><a class="post-meta__tags" href="/tags/%E5%A4%9A%E6%A8%A1%E6%80%81/">多模态</a><a class="post-meta__tags" href="/tags/EPD/">EPD</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_2.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img class="cover" src="/img/miku_cover_3.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</div></div><div class="info-2"><div class="info-item-1">KV Cache 管理有两个相关的问题：请求不断增长时，怎样分配显存；不同请求出现相同前缀时，怎样找到可复用的状态。 PagedAttention 主要处理前一个问题，用块表访问非连续存放的 KV。vLLM 的 Automatic Prefix Caching（APC）在块管理之上增加哈希索引，SGLang 的 RadixAttention 则用基数树组织前缀。比较它们时，需要把物理存储、前缀匹配和淘汰策略分开。 一、连续预留的代价 如果一个实现按最大上下文长度为每条请求预留连续 KV 空间，那么短请求也会占住尚未使用的容量。以 Qwen3-8B 的 BF16 缓存为例，36 层、8 个 KV head、head dimension 128，单 token 的全部层缓存为： mKV=2×36×8×128×2=144 KiBm_{KV}=2\times36\times8\times128\times2=144\text{ KiB}mKV​=2×36×8×128×2=144 KiB按 32768 token 预留，一条请求需要 4.5 GiB；若当前输入与已生成内容合计只有 4096...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-25</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1">低并发自回归生成中，模型每次前向通常只为每条序列推进一个 token。权重需要反复读取，而计算量不足以充分利用 GPU，Decode 可能受显存带宽限制。 投机解码（Speculative Decoding，SD）用较便宜的草稿提出多个候选，再由目标模型并行验证。MTP（Multi-Token Prediction）可以为这个过程提供随模型训练的草稿模块。两者分别涉及解码流程和训练目标。 一、串行 Decode 这里先讨论低并发、权重访存占主要开销的 Decode。高并发、长上下文或 MoE 场景还可能受计算、KV 读取和通信限制。 对全部权重参与计算的 Dense 模型，batch=1、BF16 权重时，粗略估计每步约 2N2N2N FLOPs，对应 2N2N2N 字节权重读取，算术强度约为 1 FLOP/byte。只计权重读取的理想耗时下界为权重字节数除以 HBM 带宽。下面用假设的 70B、140 GB 权重说明量级：    硬件 HBM 带宽 70B FP16 单 token 下界     A100 40GB 1555 GB/s $\sim$90 ms   H100 SX...</div></div></div></a><a class="pagination-related" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">vLLM 推理计算图</div></div><div class="info-2"><div class="info-item-1">连续两轮 Decode 可能从 32 条活跃序列变为 27 条，还加入了新请求的 Prefill。模型层结构没有变化，token 数、位置和 KV 映射却在更新。 vLLM 将这类动态负载整理成模型输入，通过编译优化 Tensor 运算，再用 CUDA Graph 重放适合捕获的 GPU 工作。理解这条路径，需要分清调度结果、模型计算图和 CUDA Graph 三个层次。下文围绕 V1 的编译与捕获机制展开，具体切图点和模式由版本、后端及配置决定。 一、计算图从调度结果开始 单请求离线推理很容易形成一种简化印象：输入进入模型，模型执行前向，采样器选出下一个 Token，然后重复这个过程。在线服务无法长期维持这条固定路径。请求到达时间不同，Prompt 长度不同，生成结束时间也不同。让所有请求组成固定 Batch，会使先完成的请求等待最慢的请求，并让空出来的计算位置得不到及时补充。 Continuous Batching 将调度边界缩小到推理迭代。每轮开始时，调度器重新判断哪些请求参与计算、各自处理多少 Token，以及可用的 KV Cache 空间如何分配。某条请求可以完成并离开...</div></div></div></a><a class="pagination-related" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</div></div><div class="info-2"><div class="info-item-1">KV Cache 管理有两个相关的问题：请求不断增长时，怎样分配显存；不同请求出现相同前缀时，怎样找到可复用的状态。 PagedAttention 主要处理前一个问题，用块表访问非连续存放的 KV。vLLM 的 Automatic Prefix Caching（APC）在块管理之上增加哈希索引，SGLang 的 RadixAttention 则用基数树组织前缀。比较它们时，需要把物理存储、前缀匹配和淘汰策略分开。 一、连续预留的代价 如果一个实现按最大上下文长度为每条请求预留连续 KV 空间，那么短请求也会占住尚未使用的容量。以 Qwen3-8B 的 BF16 缓存为例，36 层、8 个 KV head、head dimension 128，单 token 的全部层缓存为： mKV=2×36×8×128×2=144 KiBm_{KV}=2\times36\times8\times128\times2=144\text{ KiB}mKV​=2×36×8×128×2=144 KiB按 32768 token 预留，一条请求需要 4.5 GiB；若当前输入与已生成内容合计只有 4096...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1">模型权重能装进显卡，并不意味着目标并发和上下文长度也能跑起来。推理还需要 KV Cache、激活、算子工作空间，以及 CUDA Graph 和通信缓冲区。容量规划需要把这些占用分开计算。 下面用 Qwen3-8B 作为 GQA 算例，配置取自官方 config.json：36 层、32 个 Q head、8 个 KV head、head dimension 128。这个固定算例用于解释计算方法；换模型时需要重新读取配置。全文使用 GiB（2302^{30}230 字节）和 KiB（2102^{10}210 字节），避免与十进制 GB 混用。 一、权重 未量化权重的存储量为： MW=N⋅bwM_W=N\cdot b_wMW​=N⋅bw​NNN 是实际参数量，bwb_wbw​ 是每个参数的字节数。Qwen3-8B 约有 8.2B 参数，用这个近似值计算：    权重格式 字节/参数 理论存储量     FP32 4 30.55 GiB   BF16 / FP16 2 15.27 GiB   FP8 / INT8 1 7.64 GiB   INT4 0.5 3.82 GiB    量化...</div></div></div></a><a class="pagination-related" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1">训练同步梯度、MoE 分发激活、推理服务搬运 KV，都需要把数据放到下一步计算所在的位置。它们对消息大小、带宽、延迟和同步方式的要求不同，但会共享 GPU 互联、网卡和传输库。 NCCL、RDMA、InfiniBand、NVLink、NIXL 与 gRPC 分属不同层次。下面从硬件通路到服务接口，说明它们各自处理什么，以及并行策略如何使用这些组件。图中箭头表示主要依赖关系，不穷举每种部署路径。      flowchart TB     A[&quot;服务接口&lt;br&#x2F;&gt;HTTP、SSE、gRPC&quot;]     B[&quot;推理引擎&lt;br&#x2F;&gt;ZMQ、共享内存、NIXL、Mooncake&quot;]     C[&quot;训练框架&lt;br&#x2F;&gt;Process Group、DDP、Megatron&quot;]     D[&quot;集合通信库&lt;br&#x2F;&gt;NCCL、Gloo、MPI&quot;]     E[&quot;跨机传输&lt;br&#x2F;&gt;TCP、RDMA（IB、R...</div></div></div></a><a class="pagination-related" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">MoE 动态路由与稀疏计算</div></div><div class="info-2"><div class="info-item-1">DeepSeek-V3 包含约 671B 参数，每个 token 激活约 37B。激活参数少，降低了单 token 的部分计算量，但全部专家权重仍需安排存储。专家分布在多张 GPU 时，输入激活还要按路由结果跨卡传输。 MoE 因此需要分别计算权重容量、专家计算量和通信成本。仅看激活参数约占总参数的 5.5%，无法预测显存、吞吐或延迟；激活参数相近的 Dense 与 MoE 模型，也不一定有相近的执行时间。 一、参数与计算解耦 Transformer Block 的主要参数集中在 Attention 和 FFN。Dense 模型让每个 Token 经过同一组 FFN 权重，稀疏 MoE 则将这组 FFN 扩展成专家池，并在入口增加 Router。Router 根据当前 Token 的隐藏状态计算专家分数，从中选择 Top-K 专家参与前向。 设输入为 xxx，专家数量为 NNN，Router 为每个专家产生分数 si(x)s_i(x)si​(x)。选出集合 T(x)T(x)T(x) 后，MoE 层可以写成： y=∑i∈T(x)gi(x)Ei(x),∣T(x)∣=K y = \su...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">30</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">36</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%A4%9A%E6%A8%A1%E6%80%81%E6%8E%A8%E7%90%86%E9%93%BE%E8%B7%AF"><span class="toc-number">1.</span> <span class="toc-text">一、多模态推理链路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81PD-%E5%88%86%E7%A6%BB%E7%9A%84%E5%B1%80%E9%99%90"><span class="toc-number">2.</span> <span class="toc-text">二、PD 分离的局限</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81EPD-%E5%88%86%E7%A6%BB%E6%9E%B6%E6%9E%84"><span class="toc-number">3.</span> <span class="toc-text">三、EPD 分离架构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%80%A7%E8%83%BD%E6%94%B6%E7%9B%8A"><span class="toc-number">4.</span> <span class="toc-text">四、性能收益</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%B7%A5%E7%A8%8B%E4%BB%A3%E4%BB%B7"><span class="toc-number">5.</span> <span class="toc-text">五、工程代价</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%80%A7%E8%83%BD%E8%AF%84%E4%BC%B0"><span class="toc-number">6.</span> <span class="toc-text">六、性能评估</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E9%80%82%E7%94%A8%E8%BE%B9%E7%95%8C"><span class="toc-number">7.</span> <span class="toc-text">七、适用边界</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"/></a><div class="content"><a class="title" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进">从 PD 分离到 EPD 分离：多模态大模型推理架构的演进</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

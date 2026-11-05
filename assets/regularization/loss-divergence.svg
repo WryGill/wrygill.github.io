@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520">
+  <rect width="980" height="520" rx="28" fill="#f8fafc"/>
+  <rect x="60" y="50" width="860" height="400" rx="18" fill="#ffffff" stroke="#e5e7eb"/>
+  <text x="80" y="88" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">Loss divergence after checkpoint</text>
+  <text x="80" y="118" font-family="Inter, Arial, sans-serif" font-size="14" fill="#6b7280">train loss keeps falling, validation loss starts rising</text>
+
+  <line x1="120" y1="390" x2="850" y2="390" stroke="#9ca3af" stroke-width="2"/>
+  <line x1="120" y1="150" x2="120" y2="390" stroke="#9ca3af" stroke-width="2"/>
+  <text x="835" y="422" font-family="Inter, Arial" font-size="14" fill="#6b7280">step</text>
+  <text x="78" y="154" font-family="Inter, Arial" font-size="14" fill="#6b7280">loss</text>
+
+  <line x1="120" y1="330" x2="850" y2="330" stroke="#eef2f7"/>
+  <line x1="120" y1="270" x2="850" y2="270" stroke="#eef2f7"/>
+  <line x1="120" y1="210" x2="850" y2="210" stroke="#eef2f7"/>
+
+  <polyline points="150,190 330,245 510,300 700,335 830,355" fill="none" stroke="#2563eb" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="150,170 330,235 510,280 700,260 830,225" fill="none" stroke="#ef4444" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="510" cy="300" r="7" fill="#2563eb"/>
+  <circle cx="510" cy="280" r="7" fill="#ef4444"/>
+  <line x1="510" y1="140" x2="510" y2="390" stroke="#f59e0b" stroke-width="3" stroke-dasharray="8 8"/>
+  <rect x="420" y="130" width="180" height="38" rx="19" fill="#fff7ed" stroke="#fb923c"/>
+  <text x="454" y="154" font-family="Inter, Arial" font-size="15" font-weight="700" fill="#9a3412">divergence point</text>
+
+  <rect x="700" y="100" width="160" height="76" rx="14" fill="#ffffff" stroke="#e5e7eb"/>
+  <line x1="724" y1="126" x2="764" y2="126" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
+  <text x="778" y="131" font-family="Inter, Arial" font-size="15" fill="#374151">train loss</text>
+  <line x1="724" y1="154" x2="764" y2="154" stroke="#ef4444" stroke-width="5" stroke-linecap="round"/>
+  <text x="778" y="159" font-family="Inter, Arial" font-size="15" fill="#374151">val loss</text>
+
+  <text x="143" y="415" font-family="Inter, Arial" font-size="13" fill="#6b7280">1000</text>
+  <text x="323" y="415" font-family="Inter, Arial" font-size="13" fill="#6b7280">2000</text>
+  <text x="503" y="415" font-family="Inter, Arial" font-size="13" fill="#6b7280">3000</text>
+  <text x="693" y="415" font-family="Inter, Arial" font-size="13" fill="#6b7280">4000</text>
+</svg>

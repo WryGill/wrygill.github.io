@@ -1,0 +1,612 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从文本到向量：LLM 的数据管道 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="原始网页、代码和文档不能直接送入语言模型。训练前，需要提取正文、过滤与去重，再由 tokenizer 将文本编码成 token ID，最后通过 Embedding 查表得到向量。 这篇文章沿着这条数据管道，解释每一步如何改变模型看到的数据，以及它带来的存储和计算成本。  一、语料工程：从互联网到训练数据集 原始数据长什么样 网页语料常来自 Common Crawl 等来源。下面是一段示意 HTML">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从文本到向量：LLM 的数据管道">
+<meta property="og:url" content="https://wrygill.github.io/2026/06/01/llm-data-pipeline/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="原始网页、代码和文档不能直接送入语言模型。训练前，需要提取正文、过滤与去重，再由 tokenizer 将文本编码成 token ID，最后通过 Embedding 查表得到向量。 这篇文章沿着这条数据管道，解释每一步如何改变模型看到的数据，以及它带来的存储和计算成本。  一、语料工程：从互联网到训练数据集 原始数据长什么样 网页语料常来自 Common Crawl 等来源。下面是一段示意 HTML">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_1.jpg">
+<meta property="article:published_time" content="2026-06-01T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-05T13:51:18.095Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="NLP">
+<meta property="article:tag" content="Tokenization">
+<meta property="article:tag" content="Embedding">
+<meta property="article:tag" content="AI-Infra">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_1.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从文本到向量：LLM 的数据管道",
+  "url": "https://wrygill.github.io/2026/06/01/llm-data-pipeline/",
+  "image": "https://wrygill.github.io/img/miku_cover_1.jpg",
+  "datePublished": "2026-06-01T16:00:00.000Z",
+  "dateModified": "2026-11-05T13:51:18.095Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/06/01/llm-data-pipeline/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从文本到向量：LLM 的数据管道',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_1.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">从文本到向量：LLM 的数据管道</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">从文本到向量：LLM 的数据管道</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-06-01T16:00:00.000Z" title="发表于 2026-06-02 00:00:00">2026-06-02</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-05T13:51:18.095Z" title="更新于 2026-11-05 21:51:18">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infrastructure/">AI Infrastructure</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>原始网页、代码和文档不能直接送入语言模型。训练前，需要提取正文、过滤与去重，再由 tokenizer 将文本编码成 token ID，最后通过 Embedding 查表得到向量。</p>
+<p>这篇文章沿着这条数据管道，解释每一步如何改变模型看到的数据，以及它带来的存储和计算成本。</p>
+<hr>
+<h2 id="一、语料工程：从互联网到训练数据集">一、语料工程：从互联网到训练数据集</h2>
+<h3 id="原始数据长什么样">原始数据长什么样</h3>
+<p>网页语料常来自 Common Crawl 等来源。下面是一段示意 HTML，正文、广告和页脚混在一起：</p>
+<figure class="highlight html"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">html</span>&gt;</span><span class="tag">&lt;<span class="name">head</span>&gt;</span><span class="tag">&lt;<span class="name">title</span>&gt;</span>Buy cheap shoes!!!<span class="tag">&lt;/<span class="name">title</span>&gt;</span><span class="tag">&lt;/<span class="name">head</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">body</span>&gt;</span></span><br><span class="line">  <span class="tag">&lt;<span class="name">div</span> <span class="attr">class</span>=<span class="string">&quot;ad&quot;</span>&gt;</span>CLICK HERE FOR DEALS<span class="tag">&lt;/<span class="name">div</span>&gt;</span></span><br><span class="line">  <span class="tag">&lt;<span class="name">p</span>&gt;</span>The mitochondria is the powerhouse of the cell.<span class="tag">&lt;/<span class="name">p</span>&gt;</span></span><br><span class="line">  <span class="tag">&lt;<span class="name">p</span>&gt;</span>The mitochondria is the powerhouse of the cell.<span class="tag">&lt;/<span class="name">p</span>&gt;</span></span><br><span class="line">  <span class="tag">&lt;<span class="name">footer</span>&gt;</span>© 2024 spam-site.com<span class="tag">&lt;/<span class="name">footer</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">body</span>&gt;</span><span class="tag">&lt;/<span class="name">html</span>&gt;</span></span><br></pre></td></tr></table></figure>
+<p>广告、重复内容、样板文字混在一起。直接拿去训练，模型会把网页噪声当作语言模式来学习。</p>
+<h3 id="去重：MinHash-LSH">去重：MinHash + LSH</h3>
+<p>镜像、转载与模板页面会让相同内容反复进入语料。重复样本获得过高训练权重，可能增加记忆原文的倾向，也会浪费计算预算。</p>
+<p>先把文档表示为词或字符 n-gram 的集合，再用 Jaccard 相似度衡量重叠。MinHash 可以用较短签名近似这种集合相似度。对于集合 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>A</mi></mrow><annotation encoding="application/x-tex">A</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal">A</span></span></span></span></eq> 和 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi></mrow><annotation encoding="application/x-tex">B</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span></span></span></span></eq>：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>J</mi><mo stretchy="false">(</mo><mi>A</mi><mo separator="true">,</mo><mi>B</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><mi mathvariant="normal">∣</mi><mi>A</mi><mo>∩</mo><mi>B</mi><mi mathvariant="normal">∣</mi></mrow><mrow><mi mathvariant="normal">∣</mi><mi>A</mi><mo>∪</mo><mi>B</mi><mi mathvariant="normal">∣</mi></mrow></mfrac></mrow><annotation encoding="application/x-tex">J(A, B) = \frac{|A \cap B|}{|A \cup B|}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0962em;">J</span><span class="mopen">(</span><span class="mord mathnormal">A</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.363em;vertical-align:-0.936em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.427em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">∣</span><span class="mord mathnormal">A</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">∪</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mord">∣</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">∣</span><span class="mord mathnormal">A</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">∩</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mord">∣</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.936em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span></span></eqn></section><p>MinHash 的概率性质保证了签名匹配的概率恰好等于 Jaccard 相似度：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>P</mi><mo stretchy="false">(</mo><mtext>minhash</mtext><mo stretchy="false">(</mo><mi>A</mi><mo stretchy="false">)</mo><mo>=</mo><mtext>minhash</mtext><mo stretchy="false">(</mo><mi>B</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo><mo>=</mo><mi>J</mi><mo stretchy="false">(</mo><mi>A</mi><mo separator="true">,</mo><mi>B</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">P(\text{minhash}(A) = \text{minhash}(B)) = J(A, B)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">P</span><span class="mopen">(</span><span class="mord text"><span class="mord">minhash</span></span><span class="mopen">(</span><span class="mord mathnormal">A</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">minhash</span></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mclose">))</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0962em;">J</span><span class="mopen">(</span><span class="mord mathnormal">A</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.0502em;">B</span><span class="mclose">)</span></span></span></span></span></eqn></section><p>对每篇文档使用多个哈希得到签名，再通过 LSH 生成相似文档的候选对。落入同一桶只是候选信号，通常还需检查相似度阈值。</p>
+<p>相似度结果取决于文本归一化、分词或 n-gram 规则。例如，是否移除标点会改变“同一句话多一个句号”的集合表示，相似度阈值也应与这套预处理规则一起确定。</p>
+<h3 id="质量过滤">质量过滤</h3>
+<p>去重之后，还需要过滤低质量文本。两种常见方法：</p>
+<p><strong>Perplexity Filter：</strong> 用一个小型语言模型计算文档的困惑度：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>PPL</mtext><mo>=</mo><mi>exp</mi><mo>⁡</mo><mrow><mo fence="true">(</mo><mo>−</mo><mfrac><mn>1</mn><mi>N</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><mi>log</mi><mo>⁡</mo><mi>P</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>i</mi></msub><mi mathvariant="normal">∣</mi><msub><mi>x</mi><mrow><mo>&lt;</mo><mi>i</mi></mrow></msub><mo stretchy="false">)</mo><mo fence="true">)</mo></mrow></mrow><annotation encoding="application/x-tex">\text{PPL} = \exp\left(-\frac{1}{N}\sum_{i=1}^{N} \log P(x_i | x_{&lt;i})\right)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord text"><span class="mord">PPL</span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:3.106em;vertical-align:-1.2777em;"></span><span class="mop">exp</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size4">(</span></span><span class="mord">−</span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3214em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.8283em;"><span style="top:-1.8723em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mrel mtight">=</span><span class="mord mtight">1</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span><span style="top:-4.3em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.109em;">N</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.2777em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop">lo<span style="margin-right:0.0139em;">g</span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">P</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">∣</span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mrel mtight">&lt;</span><span class="mord mathnormal mtight">i</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1774em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size4">)</span></span></span></span></span></span></span></eqn></section><p>困惑度高说明文本在所选语言模型下不容易预测，可能来自乱码，也可能来自专业领域、少数语言或新知识。低困惑度可能对应重复内容，也可能是正常的常见表达。过滤阈值需要按语言与来源校准，不能把困惑度当成通用质量分数。</p>
+<p><strong>Classifier Filter：</strong> 用筛选后的优质样本与背景网页训练分类器，再按分数筛选。分类器会继承标注与来源偏差，因此还要检查被删除样本，避免系统性丢失某些领域或语言。</p>
+<h3 id="数据配比与-Scaling-Law">数据配比与 Scaling Law</h3>
+<p>数据混合需要同时考虑来源、语言、质量、重复率和目标能力。代码占比提高会改变训练分布，但不保证所有编程评测都提升；某一来源的增加，也会减少固定预算下其他来源的训练机会。</p>
+<p>计算预算可粗略写为 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>C</mi><mo>∝</mo><mi>N</mi><mi>D</mi></mrow><annotation encoding="application/x-tex">C\propto ND</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0715em;">C</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∝</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span><span class="mord mathnormal" style="margin-right:0.0278em;">D</span></span></span></span></eq>，其中 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.109em;">N</span></span></span></span></eq> 是参数量、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>D</mi></mrow><annotation encoding="application/x-tex">D</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0278em;">D</span></span></span></span></eq> 是训练 token 数。这个关系描述计算量，不单独给出最优配比。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2203.15556">Chinchilla</a> 通过实验研究固定训练预算下如何分配模型规模与数据量；若还需考虑部署成本，团队也可能选择较小模型并训练更多 token。</p>
+<p>工程上应记录每个来源的采样权重、实际 token 占比与重复采样次数，再用验证集检查能力变化。配比调整后，应检查各来源的实际训练量是否符合预期。</p>
+<p>整个数据清洗流程可以用一张图概括：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph LR
+    A[&quot;原始 HTML&lt;br&#x2F;&gt;Common Crawl&quot;] --&gt;|MinHash + LSH| B[&quot;去重文档&quot;]
+    B --&gt;|Perplexity &#x2F; Classifier| C[&quot;高质量文档&quot;]
+    C --&gt;|按来源配比| D[&quot;训练语料&quot;]
+    D --&gt;|统计分析| E[&quot;数据质量报告&quot;]
+
+    style A fill:#fff8e1,stroke:#ff9800,color:#333
+    style B fill:#f0f4ff,stroke:#5b8def,color:#333
+    style C fill:#f0f4ff,stroke:#5b8def,color:#333
+    style D fill:#e8f5e9,stroke:#4caf50,color:#333
+    style E fill:#e8f5e9,stroke:#4caf50,color:#333
+  </pre></div>
+<p>清洗得到可训练的文本后，下一步是把它编码成模型接受的 token ID 序列。</p>
+<hr>
+<h2 id="二、Tokenization：文本的数字化">二、Tokenization：文本的数字化</h2>
+<h3 id="字符级、单词级、子词级">字符级、单词级、子词级</h3>
+<p>字符级编码容易覆盖文本，但序列往往较长。字符与字节也应区分：UTF-8 的一个字符可能占多个字节；256 是单字节的取值数，不是英文字符数量。</p>
+<p>单词级编码需要很大的词表，还要处理未登录词。若把未见词统一映射为 <code>&lt;UNK&gt;</code>，就会丢失其具体拼写。</p>
+<p><strong>子词级（Subword）</strong> 取中间路线：常见词保持完整，罕见词拆分为子词片段。“unhappiness” → [“un”, “happiness”]，即使模型没见过完整词，也能从子词组合推断含义。</p>
+<h3 id="BPE-算法：从字节到子词">BPE 算法：从字节到子词</h3>
+<p>BPE 是常见子词算法。下面展示 byte-level BPE 的简化训练过程：从字节开始，反复合并高频相邻 token 对。实际 tokenizer 还可能使用文本归一化、预切分和特殊 token 规则。</p>
+<p>合并过程：</p>
+<ol>
+<li>初始词表：所有单个字节（256 个）</li>
+<li>统计语料中所有相邻字节对的出现频率</li>
+<li>合并频率最高的字节对为新 Token，加入词表</li>
+<li>重复步骤 2-3，直到词表达到目标大小</li>
+</ol>
+<p>下面用一小段英文语料演示合并。每次合并都会改变序列，下一轮据此重新统计 token 对。</p>
+<p>演示所需的两个函数分别负责计数与合并：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">def</span> <span class="title function_">get_stats</span>(<span class="params">ids</span>):</span><br><span class="line">    <span class="string">&quot;&quot;&quot;统计相邻 pair 的频率&quot;&quot;&quot;</span></span><br><span class="line">    counts = &#123;&#125;</span><br><span class="line">    <span class="keyword">for</span> pair <span class="keyword">in</span> <span class="built_in">zip</span>(ids, ids[<span class="number">1</span>:]):</span><br><span class="line">        counts[pair] = counts.get(pair, <span class="number">0</span>) + <span class="number">1</span></span><br><span class="line">    <span class="keyword">return</span> counts</span><br><span class="line"></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">merge</span>(<span class="params">ids, pair, new_id</span>):</span><br><span class="line">    <span class="string">&quot;&quot;&quot;将语料中所有 (a, b) 替换为 new_id&quot;&quot;&quot;</span></span><br><span class="line">    new_ids = []</span><br><span class="line">    i = <span class="number">0</span></span><br><span class="line">    <span class="keyword">while</span> i &lt; <span class="built_in">len</span>(ids):</span><br><span class="line">        <span class="keyword">if</span> i &lt; <span class="built_in">len</span>(ids) - <span class="number">1</span> <span class="keyword">and</span> ids[i] == pair[<span class="number">0</span>] <span class="keyword">and</span> ids[i+<span class="number">1</span>] == pair[<span class="number">1</span>]:</span><br><span class="line">            new_ids.append(new_id)</span><br><span class="line">            i += <span class="number">2</span></span><br><span class="line">        <span class="keyword">else</span>:</span><br><span class="line">            new_ids.append(ids[i])</span><br><span class="line">            i += <span class="number">1</span></span><br><span class="line">    <span class="keyword">return</span> new_ids</span><br><span class="line"></span><br><span class="line">text = <span class="string">&quot;the cat sat on the mat the cat ate the rat&quot;</span></span><br><span class="line">ids = <span class="built_in">list</span>(text.encode(<span class="string">&#x27;utf-8&#x27;</span>))</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> i <span class="keyword">in</span> <span class="built_in">range</span>(<span class="number">14</span>):</span><br><span class="line">    stats = get_stats(ids)</span><br><span class="line">    pair = <span class="built_in">max</span>(stats, key=stats.get)</span><br><span class="line">    new_id = <span class="number">256</span> + i</span><br><span class="line">    ids = merge(ids, pair, new_id)</span><br><span class="line">    <span class="built_in">print</span>(<span class="string">f&quot;合并 #<span class="subst">&#123;i&#125;</span>: <span class="subst">&#123;pair&#125;</span> -&gt; <span class="subst">&#123;new_id&#125;</span> (频率: <span class="subst">&#123;stats[pair]&#125;</span>)&quot;</span>)</span><br></pre></td></tr></table></figure>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    A[文本转为字节序列] --&gt; B[统计当前相邻 token 对]
+    B --&gt; C[合并最高频 token 对]
+    C --&gt; D{词表达到目标?}
+    D --&gt;|否| B
+    D --&gt;|是| E[保存词表与合并规则]
+  </pre></div>
+<h3 id="真实模型的-Tokenizer-长什么样">真实模型的 Tokenizer 长什么样</h3>
+<p>下面用 Qwen3-8B 的 tokenizer 检查英文、中文和代码的切分。只需下载 tokenizer 文件，无需加载模型权重：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> transformers <span class="keyword">import</span> AutoTokenizer</span><br><span class="line"></span><br><span class="line">tokenizer = AutoTokenizer.from_pretrained(<span class="string">&quot;Qwen/Qwen3-8B&quot;</span>)</span><br><span class="line"><span class="keyword">for</span> text <span class="keyword">in</span> [<span class="string">&quot;The quick brown fox&quot;</span>, <span class="string">&quot;缓存命中后跳过重复计算&quot;</span>, <span class="string">&quot;def add(a, b): return a + b&quot;</span>]:</span><br><span class="line">    ids = tokenizer.encode(text, add_special_tokens=<span class="literal">False</span>)</span><br><span class="line">    <span class="built_in">print</span>(text)</span><br><span class="line">    <span class="built_in">print</span>(ids)</span><br><span class="line">    <span class="built_in">print</span>(tokenizer.convert_ids_to_tokens(ids))</span><br><span class="line">    <span class="keyword">assert</span> tokenizer.decode(ids) == text</span><br></pre></td></tr></table></figure>
+<p>不同 tokenizer 对空格、中文和代码的编码效率不同。同一文本在不同词表下的 token 数不能直接互换；评估吞吐或上下文容量时，应使用实际模型的 tokenizer。</p>
+<h3 id="词表大小的工程权衡">词表大小的工程权衡</h3>
+<p>词表扩大可能减少某些文本的 token 数，但同时增加 Embedding 与输出词表投影的规模。实际效率还取决于 tokenizer 的训练语料、切分规则，以及更大输出层带来的计算开销。</p>
+<p>Embedding 参数量为 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">∣</mi><mi>V</mi><mi mathvariant="normal">∣</mi><mo>×</mo><mi>d</mi></mrow><annotation encoding="application/x-tex">|V|\times d</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">∣</span><span class="mord mathnormal" style="margin-right:0.2222em;">V</span><span class="mord">∣</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">d</span></span></span></span></eq>。按 <a target="_blank" rel="noopener" href="https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json">Qwen3-8B 配置</a>，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">∣</mi><mi>V</mi><mi mathvariant="normal">∣</mi><mo>=</mo><mn>151936</mn></mrow><annotation encoding="application/x-tex">|V|=151936</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">∣</span><span class="mord mathnormal" style="margin-right:0.2222em;">V</span><span class="mord">∣</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">151936</span></span></span></span></eq>、<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>d</mi><mo>=</mo><mn>4096</mn></mrow><annotation encoding="application/x-tex">d=4096</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">d</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">4096</span></span></span></span></eq>，输入表约有 622M 参数。该模型输入与输出权重不共享，输出投影也需要单独计入。</p>
+<p>Token ID 只是词表中的索引。ID 数值的大小与词义无关，模型需要通过可学习的向量表示利用这些离散符号。</p>
+<hr>
+<h2 id="三、Embedding：从离散-ID-到连续语义空间">三、Embedding：从离散 ID 到连续语义空间</h2>
+<h3 id="从-one-hot-到稠密向量">从 one-hot 到稠密向量</h3>
+<p>最朴素的表示方式是 one-hot：token ID=42 对应一个 32000 维的向量，只有第 42 位是 1，其余全是 0。</p>
+<p>这种表示有一个根本问题：任意两个不同的 one-hot 向量的内积都是 0。“cat” 和 “dog” 之间的相似度 = “cat” 和 “democracy” 之间的相似度 = 0。模型无法从 one-hot 中获得任何语义信息。</p>
+<p><strong>Embedding 的做法：</strong> 用一个查找表把离散 ID 映射到低维稠密向量。</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi mathvariant="bold">e</mi><mi>t</mi></msub><mo>=</mo><mi>E</mi><mo stretchy="false">[</mo><mi>t</mi><mo stretchy="false">]</mo><mo>∈</mo><msup><mi mathvariant="double-struck">R</mi><mi>d</mi></msup></mrow><annotation encoding="application/x-tex">\mathbf{e}_t = E[t] \in \mathbb{R}^{d}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5944em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathbf">e</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="mopen">[</span><span class="mord mathnormal">t</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8991em;"></span><span class="mord"><span class="mord mathbb">R</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8991em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">d</span></span></span></span></span></span></span></span></span></span></span></span></span></eqn></section><p>其中 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>∈</mo><msup><mi mathvariant="double-struck">R</mi><mrow><mi mathvariant="normal">∣</mi><mi>V</mi><mi mathvariant="normal">∣</mi><mo>×</mo><mi>d</mi></mrow></msup></mrow><annotation encoding="application/x-tex">E \in \mathbb{R}^{|V| \times d}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7224em;vertical-align:-0.0391em;"></span><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.888em;"></span><span class="mord"><span class="mord mathbb">R</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.888em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">∣</span><span class="mord mathnormal mtight" style="margin-right:0.2222em;">V</span><span class="mord mtight">∣</span><span class="mbin mtight">×</span><span class="mord mathnormal mtight">d</span></span></span></span></span></span></span></span></span></span></span></span></eq> 是可学习的参数矩阵，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">∣</mi><mi>V</mi><mi mathvariant="normal">∣</mi></mrow><annotation encoding="application/x-tex">|V|</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">∣</span><span class="mord mathnormal" style="margin-right:0.2222em;">V</span><span class="mord">∣</span></span></span></span></eq> 是词表大小，<eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>d</mi></mrow><annotation encoding="application/x-tex">d</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">d</span></span></span></span></eq> 是隐藏维度。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> torch</span><br><span class="line"><span class="keyword">import</span> torch.nn <span class="keyword">as</span> nn</span><br><span class="line"></span><br><span class="line"><span class="comment"># 使用小尺寸展示查表，实际模型的矩阵大得多</span></span><br><span class="line">embedding = nn.Embedding(<span class="number">1000</span>, <span class="number">64</span>)</span><br><span class="line">vec = embedding(torch.tensor(<span class="number">42</span>))</span><br><span class="line"><span class="built_in">print</span>(vec.shape)  <span class="comment"># torch.Size([64])</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+<p>Embedding 表随训练更新，向量中会包含任务相关的统计关系。但不能保证任意语义相近词都按某种距离严格聚类。图中的聚类是示意，实际分析需要指定距离、层和上下文。</p>
+<p><img src="/assets/llm-data-pipeline/embedding-space.png" alt="Embedding 矩阵与语义空间中的向量聚类"></p>
+<h3 id="位置编码：让模型知道顺序">位置编码：让模型知道顺序</h3>
+<p>不带位置机制和因果 mask 的 Self-Attention 对输入排列具有等变性：输入重新排列，输出也按对应关系重排。它无法仅凭内容区分同一组 token 的不同顺序，因此需要位置机制。</p>
+<p>位置信息可以加在输入向量上，也可以像 RoPE 一样作用于 Attention 中的 Q/K。</p>
+<p><strong>正弦位置编码（原始 Transformer）：</strong></p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>P</mi><msub><mi>E</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mi>o</mi><mi>s</mi><mo separator="true">,</mo><mn>2</mn><mi>i</mi><mo stretchy="false">)</mo></mrow></msub><mo>=</mo><mi>sin</mi><mo>⁡</mo><mrow><mo fence="true">(</mo><mfrac><mrow><mi>p</mi><mi>o</mi><mi>s</mi></mrow><msup><mn>10000</mn><mrow><mn>2</mn><mi>i</mi><mi mathvariant="normal">/</mi><mi>d</mi></mrow></msup></mfrac><mo fence="true">)</mo></mrow><mo separator="true">,</mo><mspace width="1em"/><mi>P</mi><msub><mi>E</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mi>o</mi><mi>s</mi><mo separator="true">,</mo><mn>2</mn><mi>i</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msub><mo>=</mo><mi>cos</mi><mo>⁡</mo><mrow><mo fence="true">(</mo><mfrac><mrow><mi>p</mi><mi>o</mi><mi>s</mi></mrow><msup><mn>10000</mn><mrow><mn>2</mn><mi>i</mi><mi mathvariant="normal">/</mi><mi>d</mi></mrow></msup></mfrac><mo fence="true">)</mo></mrow></mrow><annotation encoding="application/x-tex">PE_{(pos, 2i)} = \sin\left(\frac{pos}{10000^{2i/d}}\right), \quad PE_{(pos, 2i+1)} = \cos\left(\frac{pos}{10000^{2i/d}}\right)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0385em;vertical-align:-0.3552em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">P</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3448em;"><span style="top:-2.5198em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight">os</span><span class="mpunct mtight">,</span><span class="mord mtight">2</span><span class="mord mathnormal mtight">i</span><span class="mclose mtight">)</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3552em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.854em;vertical-align:-0.704em;"></span><span class="mop">sin</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size2">(</span></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.1076em;"><span style="top:-2.296em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1000</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.814em;"><span style="top:-2.989em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span><span class="mord mathnormal mtight">i</span><span class="mord mtight">/</span><span class="mord mathnormal mtight">d</span></span></span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal">p</span><span class="mord mathnormal">os</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.704em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size2">)</span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mpunct">,</span><span class="mspace" style="margin-right:1em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.1389em;">P</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3448em;"><span style="top:-2.5198em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight">os</span><span class="mpunct mtight">,</span><span class="mord mtight">2</span><span class="mord mathnormal mtight">i</span><span class="mbin mtight">+</span><span class="mord mtight">1</span><span class="mclose mtight">)</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3552em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.854em;vertical-align:-0.704em;"></span><span class="mop">cos</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size2">(</span></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.1076em;"><span style="top:-2.296em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1000</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.814em;"><span style="top:-2.989em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span><span class="mord mathnormal mtight">i</span><span class="mord mtight">/</span><span class="mord mathnormal mtight">d</span></span></span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathnormal">p</span><span class="mord mathnormal">os</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.704em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size2">)</span></span></span></span></span></span></span></eqn></section><p>不同维度使用不同频率的正弦、余弦函数。它不需要学习位置表，可以计算训练长度之外的位置，但能计算不等于模型在更长序列上仍可靠。</p>
+<p><strong>RoPE（旋转位置编码）：</strong></p>
+<p>Qwen3 等模型使用 RoPE，通过旋转 query 和 key 编码位置信息。</p>
+<p>对于位置 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>m</mi></mrow><annotation encoding="application/x-tex">m</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">m</span></span></span></span></eq> 的 query <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">q</mi><mi>m</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf{q}_m</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6389em;vertical-align:-0.1944em;"></span><span class="mord"><span class="mord mathbf">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">m</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq> 和位置 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>n</mi></mrow><annotation encoding="application/x-tex">n</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">n</span></span></span></span></eq> 的 key <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">k</mi><mi>n</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf{k}_n</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathbf">k</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">n</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></eq>，位置相关部分依赖相对位置，分数同时取决于内容 <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>m</mi><mo>−</mo><mi>n</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(m-n)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord mathnormal">m</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">n</span><span class="mclose">)</span></span></span></span></eq>：</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msubsup><mi mathvariant="bold">q</mi><mi>m</mi><mi mathvariant="normal">⊤</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>n</mi></msub><mo>=</mo><mi>f</mi><mo stretchy="false">(</mo><msub><mi mathvariant="bold">x</mi><mi>m</mi></msub><mo separator="true">,</mo><msub><mi mathvariant="bold">x</mi><mi>n</mi></msub><mo separator="true">,</mo><mi>m</mi><mo>−</mo><mi>n</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\mathbf{q}_m^\top \mathbf{k}_n = f(\mathbf{x}_m, \mathbf{x}_n, m-n)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.1461em;vertical-align:-0.247em;"></span><span class="mord"><span class="mord mathbf">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8991em;"><span style="top:-2.453em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">m</span></span></span><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">⊤</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathbf">k</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">n</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.1076em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathbf">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">m</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathbf">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">n</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">m</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">n</span><span class="mclose">)</span></span></span></span></span></eqn></section><p>RoPE 将向量维度两两配对，按位置旋转不同角度。点积中出现相对位置信息，同时保留内容相关性。扩展上下文还需要缩放策略、训练或验证，不能把旋转形式本身当成无限长度泛化的保证。</p>
+<p><img src="/assets/llm-data-pipeline/positional-encoding.png" alt="正弦位置编码与 RoPE 旋转编码对比"></p>
+<h3 id="Embedding-层的工程参数">Embedding 层的工程参数</h3>
+<p>Embedding 的初始化方式与学习率安排应以具体模型为准。Qwen3 配置中的初始化标准差为 0.02。Warmup 逐步提高训练初期的学习率，影响的是包括 Embedding 在内的整体优化过程。</p>
+<hr>
+<p>数据管道的各阶段可以整理为：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    graph LR
+    A[&quot;原始语料&quot;] --&gt;|&quot;去重 + 质量过滤&quot;| B[&quot;清洗文本&quot;]
+    B --&gt;|&quot;BPE Tokenization&quot;| C[&quot;Token IDs&quot;]
+    C --&gt;|&quot;Embedding 查表&quot;| D[&quot;向量序列 ∈ ℝᴺˣᵈ&quot;]
+    D --&gt;|&quot;送入 Transformer&quot;| E[&quot;上下文表示&quot;]
+
+    style A fill:#fff8e1,stroke:#ff9800,color:#333
+    style B fill:#f0f4ff,stroke:#5b8def,color:#333
+    style C fill:#f0f4ff,stroke:#5b8def,color:#333
+    style D fill:#e8f5e9,stroke:#4caf50,color:#333
+    style E fill:#fce4ec,stroke:#ef5350,color:#333
+  </pre></div>
+<p>输入 Embedding 是按 token ID 查表得到的，同一个 token 在不同句子中会取到相同的初始向量。后续 Transformer 层结合位置与可见上下文更新表示，才会区分它在具体句子中的用法。</p>
+<p>下一篇讨论 Self-Attention 如何聚合上下文，以及这些计算在显存和 GPU 内核中如何实现。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/06/01/llm-data-pipeline/">https://wrygill.github.io/2026/06/01/llm-data-pipeline/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/NLP/">NLP</a><a class="post-meta__tags" href="/tags/Tokenization/">Tokenization</a><a class="post-meta__tags" href="/tags/Embedding/">Embedding</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI-Infra</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_1.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/06/09/transformer-architecture/" title="Transformer 架构与注意力机制"><img class="cover" src="/img/miku_cover_3.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Transformer 架构与注意力机制</div></div><div class="info-2"><div class="info-item-1">Embedding 查表为每个 token 提供初始向量，但同一个 token 在不同句子里仍会取到同一行参数。Transformer 通过 Attention 聚合上下文，再用前馈网络做非线性变换，形成与当前语境相关的表示。 本文先展开单层计算，再讨论多头结构、KV Cache 与 FlashAttention。示例以因果语言模型为主，每个位置只能访问自身及此前的 token。  一、Self-Attention 机制 给定一个长度为 NNN 的 token 序列，每个 token 对应一个 ddd 维向量。要让 tokeni_ii​ 的表示融合其他 token 的信息，最直接的想法是加权平均——权重由 tokeni_ii​ 和 tokenj_jj​ 的相似度决定。这就是 Self-Attention 的起点。 QKV 注意力分数 输入矩阵 X∈RN×dX \in \mathbb{R}^{N \times d}X∈RN×d（NNN 个 token，每个 ddd 维），通过三个可学习的投影矩阵得到： Q=XWQ,K=XWK,V=XWVQ = XW_Q, \quad K = XW_...</div></div></div></a><a class="pagination-related" href="/2026/06/01/mixed-precision/" title="Mixed Precision：从 FP32 到 FP8"><img class="cover" src="/img/miku_cover_2.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Mixed Precision：从 FP32 到 FP8</div></div><div class="info-2"><div class="info-item-1">Mixed Precision：从 FP32 到 FP8 训练一个 7B 模型，显存里需要保存的远不止权重。若参数、梯度以及 Adam 的两个状态都用 FP32，仅这四份张量就需要 112 GB，还未计入激活。一张 80 GB 显卡无法容纳。 混合精度将部分计算改用低精度，同时在需要的位置保留高精度状态。收益来自更小的激活、更低的访存量和更高的矩阵计算吞吐；能节省多少总显存，还取决于优化器与参数的存储方式。 一、训练状态的显存 设参数量 N=7×109N=7\times10^9N=7×109，全文按十进制 GB 计算。全 FP32 的 Adam 训练状态为： M=4N⏟参数+4N⏟梯度+4N+4N⏟Adam一阶与二阶矩=16N=112 GBM=\underbrace{4N}_{参数}+\underbrace{4N}_{梯度}+\underbrace{4N+4N}_{Adam一阶与二阶矩}=16N=112\text{ GB}M=参数4N​​+梯度4N​​+Adam一阶与二阶矩4N+4N​​=16N=112 GBAdam 的两个状态分别累计梯度的一阶矩与二阶矩： mt=β1mt−1+...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/06/14/llm-alignment/" title="LLM 的训练与对齐"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-15</div><div class="info-item-2">LLM 的训练与对齐</div></div><div class="info-2"><div class="info-item-1">基础模型与指令模型可以拥有相近的架构，面对同一个请求却表现不同。输入“用两句话解释 KV Cache”，基础模型可能继续补全一段教程，指令模型则更倾向于按要求回答。后训练调整的，就是这种遵循指令和组织答案的行为。 训练方法需要按用途区分：SFT 使用示范回答，偏好优化使用回答之间的比较，RLVR 使用可验证奖励；PPO、GRPO、DAPO 则涉及策略如何更新。实际训练会根据数据和反馈条件组合这些方法。 一、预训练与后训练的目标 自回归预训练通常最小化下一个 token 的负对数概率： LPT=−1T∑t=1Tlog⁡P(xt∣x&lt;t;θ)\mathcal{L}_{PT}=-\frac{1}{T}\sum_{t=1}^{T}\log P(x_t\mid x_{&lt;t};\theta)LPT​=−T1​t=1∑T​logP(xt​∣x&lt;t​;θ)模型由此学习语言、知识和数据中的各种模式。但训练语料的后续文本不一定是在执行用户指令：一个问题后面可能接答案，也可能接另一个问题或一段评论。因此，续写能力并不自动等于稳定的指令遵循能力。 后训练使用更贴近目标行为的数据与反馈。...</div></div></div></a><a class="pagination-related" href="/2026/07/20/vllm-inference-computation-graph/" title="vLLM 推理计算图"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">vLLM 推理计算图</div></div><div class="info-2"><div class="info-item-1">连续两轮 Decode 可能从 32 条活跃序列变为 27 条，还加入了新请求的 Prefill。模型层结构没有变化，token 数、位置和 KV 映射却在更新。 vLLM 将这类动态负载整理成模型输入，通过编译优化 Tensor 运算，再用 CUDA Graph 重放适合捕获的 GPU 工作。理解这条路径，需要分清调度结果、模型计算图和 CUDA Graph 三个层次。下文围绕 V1 的编译与捕获机制展开，具体切图点和模式由版本、后端及配置决定。 一、计算图从调度结果开始 单请求离线推理很容易形成一种简化印象：输入进入模型，模型执行前向，采样器选出下一个 Token，然后重复这个过程。在线服务无法长期维持这条固定路径。请求到达时间不同，Prompt 长度不同，生成结束时间也不同。让所有请求组成固定 Batch，会使先完成的请求等待最慢的请求，并让空出来的计算位置得不到及时补充。 Continuous Batching 将调度边界缩小到推理迭代。每轮开始时，调度器重新判断哪些请求参与计算、各自处理多少 Token，以及可用的 KV Cache 空间如何分配。某条请求可以完成并离开...</div></div></div></a><a class="pagination-related" href="/2026/06/09/transformer-architecture/" title="Transformer 架构与注意力机制"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-10</div><div class="info-item-2">Transformer 架构与注意力机制</div></div><div class="info-2"><div class="info-item-1">Embedding 查表为每个 token 提供初始向量，但同一个 token 在不同句子里仍会取到同一行参数。Transformer 通过 Attention 聚合上下文，再用前馈网络做非线性变换，形成与当前语境相关的表示。 本文先展开单层计算，再讨论多头结构、KV Cache 与 FlashAttention。示例以因果语言模型为主，每个位置只能访问自身及此前的 token。  一、Self-Attention 机制 给定一个长度为 NNN 的 token 序列，每个 token 对应一个 ddd 维向量。要让 tokeni_ii​ 的表示融合其他 token 的信息，最直接的想法是加权平均——权重由 tokeni_ii​ 和 tokenj_jj​ 的相似度决定。这就是 Self-Attention 的起点。 QKV 注意力分数 输入矩阵 X∈RN×dX \in \mathbb{R}^{N \times d}X∈RN×d（NNN 个 token，每个 ddd 维），通过三个可学习的投影矩阵得到： Q=XWQ,K=XWK,V=XWVQ = XW_Q, \quad K = XW_...</div></div></div></a><a class="pagination-related" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1">训练同步梯度、MoE 分发激活、推理服务搬运 KV，都需要把数据放到下一步计算所在的位置。它们对消息大小、带宽、延迟和同步方式的要求不同，但会共享 GPU 互联、网卡和传输库。 NCCL、RDMA、InfiniBand、NVLink、NIXL 与 gRPC 分属不同层次。下面从硬件通路到服务接口，说明它们各自处理什么，以及并行策略如何使用这些组件。图中箭头表示主要依赖关系，不穷举每种部署路径。      flowchart TB     A[&quot;服务接口&lt;br&#x2F;&gt;HTTP、SSE、gRPC&quot;]     B[&quot;推理引擎&lt;br&#x2F;&gt;ZMQ、共享内存、NIXL、Mooncake&quot;]     C[&quot;训练框架&lt;br&#x2F;&gt;Process Group、DDP、Megatron&quot;]     D[&quot;集合通信库&lt;br&#x2F;&gt;NCCL、Gloo、MPI&quot;]     E[&quot;跨机传输&lt;br&#x2F;&gt;TCP、RDMA（IB、R...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1">模型权重能装进显卡，并不意味着目标并发和上下文长度也能跑起来。推理还需要 KV Cache、激活、算子工作空间，以及 CUDA Graph 和通信缓冲区。容量规划需要把这些占用分开计算。 下面用 Qwen3-8B 作为 GQA 算例，配置取自官方 config.json：36 层、32 个 Q head、8 个 KV head、head dimension 128。这个固定算例用于解释计算方法；换模型时需要重新读取配置。全文使用 GiB（2302^{30}230 字节）和 KiB（2102^{10}210 字节），避免与十进制 GB 混用。 一、权重 未量化权重的存储量为： MW=N⋅bwM_W=N\cdot b_wMW​=N⋅bw​NNN 是实际参数量，bwb_wbw​ 是每个参数的字节数。Qwen3-8B 约有 8.2B 参数，用这个近似值计算：    权重格式 字节/参数 理论存储量     FP32 4 30.55 GiB   BF16 / FP16 2 15.27 GiB   FP8 / INT8 1 7.64 GiB   INT4 0.5 3.82 GiB    量化...</div></div></div></a><a class="pagination-related" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">MoE 动态路由与稀疏计算</div></div><div class="info-2"><div class="info-item-1">DeepSeek-V3 包含约 671B 参数，每个 token 激活约 37B。激活参数少，降低了单 token 的部分计算量，但全部专家权重仍需安排存储。专家分布在多张 GPU 时，输入激活还要按路由结果跨卡传输。 MoE 因此需要分别计算权重容量、专家计算量和通信成本。仅看激活参数约占总参数的 5.5%，无法预测显存、吞吐或延迟；激活参数相近的 Dense 与 MoE 模型，也不一定有相近的执行时间。 一、参数与计算解耦 Transformer Block 的主要参数集中在 Attention 和 FFN。Dense 模型让每个 Token 经过同一组 FFN 权重，稀疏 MoE 则将这组 FFN 扩展成专家池，并在入口增加 Router。Router 根据当前 Token 的隐藏状态计算专家分数，从中选择 Top-K 专家参与前向。 设输入为 xxx，专家数量为 NNN，Router 为每个专家产生分数 si(x)s_i(x)si​(x)。选出集合 T(x)T(x)T(x) 后，MoE 层可以写成： y=∑i∈T(x)gi(x)Ei(x),∣T(x)∣=K y = \su...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">30</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">36</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%AF%AD%E6%96%99%E5%B7%A5%E7%A8%8B%EF%BC%9A%E4%BB%8E%E4%BA%92%E8%81%94%E7%BD%91%E5%88%B0%E8%AE%AD%E7%BB%83%E6%95%B0%E6%8D%AE%E9%9B%86"><span class="toc-number">1.</span> <span class="toc-text">一、语料工程：从互联网到训练数据集</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E5%A7%8B%E6%95%B0%E6%8D%AE%E9%95%BF%E4%BB%80%E4%B9%88%E6%A0%B7"><span class="toc-number">1.1.</span> <span class="toc-text">原始数据长什么样</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%BB%E9%87%8D%EF%BC%9AMinHash-LSH"><span class="toc-number">1.2.</span> <span class="toc-text">去重：MinHash + LSH</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B4%A8%E9%87%8F%E8%BF%87%E6%BB%A4"><span class="toc-number">1.3.</span> <span class="toc-text">质量过滤</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%B0%E6%8D%AE%E9%85%8D%E6%AF%94%E4%B8%8E-Scaling-Law"><span class="toc-number">1.4.</span> <span class="toc-text">数据配比与 Scaling Law</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Tokenization%EF%BC%9A%E6%96%87%E6%9C%AC%E7%9A%84%E6%95%B0%E5%AD%97%E5%8C%96"><span class="toc-number">2.</span> <span class="toc-text">二、Tokenization：文本的数字化</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AD%97%E7%AC%A6%E7%BA%A7%E3%80%81%E5%8D%95%E8%AF%8D%E7%BA%A7%E3%80%81%E5%AD%90%E8%AF%8D%E7%BA%A7"><span class="toc-number">2.1.</span> <span class="toc-text">字符级、单词级、子词级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#BPE-%E7%AE%97%E6%B3%95%EF%BC%9A%E4%BB%8E%E5%AD%97%E8%8A%82%E5%88%B0%E5%AD%90%E8%AF%8D"><span class="toc-number">2.2.</span> <span class="toc-text">BPE 算法：从字节到子词</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B%E7%9A%84-Tokenizer-%E9%95%BF%E4%BB%80%E4%B9%88%E6%A0%B7"><span class="toc-number">2.3.</span> <span class="toc-text">真实模型的 Tokenizer 长什么样</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%8D%E8%A1%A8%E5%A4%A7%E5%B0%8F%E7%9A%84%E5%B7%A5%E7%A8%8B%E6%9D%83%E8%A1%A1"><span class="toc-number">2.4.</span> <span class="toc-text">词表大小的工程权衡</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Embedding%EF%BC%9A%E4%BB%8E%E7%A6%BB%E6%95%A3-ID-%E5%88%B0%E8%BF%9E%E7%BB%AD%E8%AF%AD%E4%B9%89%E7%A9%BA%E9%97%B4"><span class="toc-number">3.</span> <span class="toc-text">三、Embedding：从离散 ID 到连续语义空间</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%8E-one-hot-%E5%88%B0%E7%A8%A0%E5%AF%86%E5%90%91%E9%87%8F"><span class="toc-number">3.1.</span> <span class="toc-text">从 one-hot 到稠密向量</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%8D%E7%BD%AE%E7%BC%96%E7%A0%81%EF%BC%9A%E8%AE%A9%E6%A8%A1%E5%9E%8B%E7%9F%A5%E9%81%93%E9%A1%BA%E5%BA%8F"><span class="toc-number">3.2.</span> <span class="toc-text">位置编码：让模型知道顺序</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Embedding-%E5%B1%82%E7%9A%84%E5%B7%A5%E7%A8%8B%E5%8F%82%E6%95%B0"><span class="toc-number">3.3.</span> <span class="toc-text">Embedding 层的工程参数</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"/></a><div class="content"><a class="title" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进">从 PD 分离到 EPD 分离：多模态大模型推理架构的演进</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>

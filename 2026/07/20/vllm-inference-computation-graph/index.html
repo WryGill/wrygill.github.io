@@ -1,0 +1,652 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>vLLM 推理计算图 | Aromatic</title><meta name="author" content="Aromatic"><meta name="copyright" content="Aromatic"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="连续两轮 Decode 可能从 32 条活跃序列变为 27 条，还加入了新请求的 Prefill。模型层结构没有变化，token 数、位置和 KV 映射却在更新。 vLLM 将这类动态负载整理成模型输入，通过编译优化 Tensor 运算，再用 CUDA Graph 重放适合捕获的 GPU 工作。理解这条路径，需要分清调度结果、模型计算图和 CUDA Graph 三个层次。下文围绕 V1 的编译与捕">
+<meta property="og:type" content="article">
+<meta property="og:title" content="vLLM 推理计算图">
+<meta property="og:url" content="https://wrygill.github.io/2026/07/20/vllm-inference-computation-graph/index.html">
+<meta property="og:site_name" content="Aromatic">
+<meta property="og:description" content="连续两轮 Decode 可能从 32 条活跃序列变为 27 条，还加入了新请求的 Prefill。模型层结构没有变化，token 数、位置和 KV 映射却在更新。 vLLM 将这类动态负载整理成模型输入，通过编译优化 Tensor 运算，再用 CUDA Graph 重放适合捕获的 GPU 工作。理解这条路径，需要分清调度结果、模型计算图和 CUDA Graph 三个层次。下文围绕 V1 的编译与捕">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wrygill.github.io/img/miku_cover_1.jpg">
+<meta property="article:published_time" content="2026-07-20T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-05T13:51:18.095Z">
+<meta property="article:author" content="Aromatic">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="推理优化">
+<meta property="article:tag" content="AI-Infra">
+<meta property="article:tag" content="vLLM">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wrygill.github.io/img/miku_cover_1.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "vLLM 推理计算图",
+  "url": "https://wrygill.github.io/2026/07/20/vllm-inference-computation-graph/",
+  "image": "https://wrygill.github.io/img/miku_cover_1.jpg",
+  "datePublished": "2026-07-20T16:00:00.000Z",
+  "dateModified": "2026-11-05T13:51:18.095Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Aromatic",
+      "url": "https://wrygill.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://wrygill.github.io/2026/07/20/vllm-inference-computation-graph/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.5-b1"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.13.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'vLLM 推理计算图',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div class="post" id="body-wrap"><header class="post-bg fixed" id="page-header" style="background-image: url(/img/miku_cover_1.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="/%5Bobject%20Object%5D" alt="Logo"><span class="site-name">Aromatic</span></a><a class="nav-page-title" href="/"><span class="site-name">vLLM 推理计算图</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav><div id="post-info"><h1 class="post-title">vLLM 推理计算图</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-05T13:51:18.095Z" title="更新于 2026-11-05 21:51:18">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infrastructure/">AI Infrastructure</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>连续两轮 Decode 可能从 32 条活跃序列变为 27 条，还加入了新请求的 Prefill。模型层结构没有变化，token 数、位置和 KV 映射却在更新。</p>
+<p>vLLM 将这类动态负载整理成模型输入，通过编译优化 Tensor 运算，再用 CUDA Graph 重放适合捕获的 GPU 工作。理解这条路径，需要分清调度结果、模型计算图和 CUDA Graph 三个层次。下文围绕 V1 的编译与捕获机制展开，具体切图点和模式由版本、后端及配置决定。</p>
+<h2 id="一、计算图从调度结果开始">一、计算图从调度结果开始</h2>
+<p>单请求离线推理很容易形成一种简化印象：输入进入模型，模型执行前向，采样器选出下一个 Token，然后重复这个过程。在线服务无法长期维持这条固定路径。请求到达时间不同，Prompt 长度不同，生成结束时间也不同。让所有请求组成固定 Batch，会使先完成的请求等待最慢的请求，并让空出来的计算位置得不到及时补充。</p>
+<p>Continuous Batching 将调度边界缩小到推理迭代。每轮开始时，调度器重新判断哪些请求参与计算、各自处理多少 Token，以及可用的 KV Cache 空间如何分配。某条请求可以完成并离开，等待队列中的请求也可以进入下一轮。模型仍然执行熟悉的 Transformer 前向，但这一轮的实际工作负载已经由调度器重新定义。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart LR
+    A[&quot;请求队列&quot;] --&gt; B[&quot;调度器&quot;]
+    B --&gt; C[&quot;本轮 Token&quot;]
+    B --&gt; D[&quot;Attention 元数据&quot;]
+    B --&gt; E[&quot;KV Cache 映射&quot;]
+    C --&gt; F[&quot;模型计算图&quot;]
+    D --&gt; F
+    E --&gt; F
+    G[&quot;模型权重&quot;] --&gt; F
+    F --&gt; H[&quot;Logits&quot;]
+    H --&gt; I[&quot;采样&quot;]
+    I --&gt; A
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef data fill:#f5f5f5,stroke:#9e9e9e,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class A,G input;
+    class B,F,I process;
+    class C,D,E data;
+    class H output;
+  </pre></div>
+<p>这张图划出了第一条边界。请求队列、优先级、抢占和 KV Cache Block 分配属于图外控制逻辑；Linear、RMSNorm、RoPE、Attention 和 MLP 等 Tensor 运算组成模型计算图。调度器先完成本轮决策，再把 Token、位置、序列长度和缓存映射整理成模型读取的运行时输入。</p>
+<p>KV Cache 在这条边界上具有特殊地位。它由模型计算读取和写入，却不会随着单次前向结束而消失。它保存序列此前计算出的 Key 和 Value，并在后续 Decode 中持续复用。调度器管理它的生命周期与物理位置，Attention Kernel 根据本轮收到的映射信息访问对应数据。计算图无需记录某个请求经历过多少轮调度，只需知道本轮从哪里读取缓存、向哪里写入新结果。</p>
+<p>推理计算图描述的是一轮选定工作负载如何完成 Tensor 计算。它不覆盖请求从到达到结束的完整生命周期，也不替代调度器。这个边界让动态服务与模型编译能够各自演进：调度器可以改变组批策略，模型图仍然保留 Transformer 的主要数据依赖。</p>
+<h2 id="二、模型前向进入编译器">二、模型前向进入编译器</h2>
+<p>模型的模块树适合开发者组织代码。一个 Transformer Block 可以由 Attention、MLP 和若干 Norm 模块构成，模块内部还会继续调用 Linear、激活函数和自定义算子。模块树表达所有权与代码层次，却没有完整展开一次前向真正发生的 Tensor 运算。</p>
+<p>计算图采用另一种观察方式。节点表示算子或某段计算，边表示 Tensor 及其数据依赖。节点还可以携带 Shape、Dtype、Device 等信息，参数与常量也会进入图的分析范围。编译器由此能够看到某个中间结果被谁使用、相邻算子是否存在固定模式，以及某段计算是否依赖运行时数据。</p>
+<p>在 vLLM V1 的典型路径中，<code>torch.compile</code> 参与模型前向的捕获与编译。可以把这条链路压缩成三个角色：</p>
+<ul>
+<li>TorchDynamo 从 Python 程序中捕获 Tensor 计算；</li>
+<li>FX 风格的图表示承载算子和数据依赖；</li>
+<li>Inductor 一类后端进一步优化并生成可执行 Kernel。</li>
+</ul>
+<p>依赖 Tensor 实际数值的 Python 分支、不受支持的操作和副作用，可能触发 Graph Break。普通 <code>torch.compile</code> 在允许断图时可分段执行；要求 fullgraph 的捕获路径则可能直接报错，不能假定 vLLM 会自动回退并继续运行。</p>
+<p>Graph Break 的影响不止是多执行一段 Python。编译器会失去跨边界观察和改写程序的机会。假设边界两侧存在可以合并的操作，它们进入不同子图后，后端便无法把二者识别成同一个融合模式。边界也会增加编译区域与普通执行区域之间的切换。</p>
+<p>模型能够执行，与模型能够被稳定捕获，是两项不同的兼容性要求。为 vLLM 接入自定义模型时，完成一次正确前向只能说明语义成立；想获得预期的编译收益，还要检查捕获范围、动态 Shape 和自定义算子的行为。推理框架需要先尽量看见完整模型前向，后续图优化才有足够的操作空间。</p>
+<h2 id="三、完整捕获后的主动切图">三、完整捕获后的主动切图</h2>
+<p>意外 Graph Break 发生在模型捕获阶段。编译器无法继续追踪程序，只能在当前位置结束当前图。主动切图发生得更晚：框架已经取得模型计算关系，再按照已知的特殊操作划分子图。前者意味着信息丢失，后者属于执行规划。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart TB
+    A[&quot;Python 模型前向&quot;] --&gt; B[&quot;TorchDynamo 完整捕获&quot;]
+    B --&gt; C[&quot;完整模型计算图&quot;]
+    C --&gt; D[&quot;编译子图 0&quot;]
+    D --&gt; E[&quot;Attention 切分点&quot;]
+    E --&gt; F[&quot;编译子图 1&quot;]
+    F --&gt; G[&quot;Attention 切分点&quot;]
+    G --&gt; H[&quot;编译子图 2&quot;]
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef boundary fill:#fce4ec,stroke:#ef5350,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class A input;
+    class B,D,F,H process;
+    class E,G boundary;
+    class C output;
+  </pre></div>
+<p>Attention 经常出现在切分位置，因为它与 LLM 运行时状态结合得最紧密。普通前馈层主要处理当前激活，Attention 还要读取动态增长的 KV Cache，并读取 Block Table、Slot Mapping、上下文长度等元数据。Prefill 和 Decode 的 Token 规模差异也会改变 Attention 的执行特征。不同 Attention Backend 对动态 Shape、工作空间和图捕获的支持条件并不完全相同。</p>
+<p>将这类特殊操作作为边界后，前后的稳定 Tensor 计算可以分别交给编译后端，Attention 则由对应实现处理。运行时依照原有数据依赖串联这些片段，一轮模型前向由多个编译子图和特殊操作共同完成。这就是 Piecewise Compilation 的基本思路。</p>
+<p>这里的“切分点”不代表 Attention 永远无法编译。随着 Attention Backend、编译能力和 CUDA Graph 支持变化，能够纳入编译或捕获的范围也会变化。主动切图表达的是一种可控制边界：框架先保证特殊操作正确执行，再逐步扩大编译覆盖范围。</p>
+<p>切图会付出代价。跨子图融合受到边界限制，子图越多，运行时连接这些片段的次数也越多。完整图则会提高动态行为的处理难度，并要求更多操作满足同一编译后端和捕获模式的约束。推理框架需要在全局优化范围、后端兼容性、动态内存行为和运行稳定性之间选择边界。</p>
+<p>扩大编译范围提供更多跨算子优化机会，也提高动态行为与后端兼容性的要求。Piecewise Compilation 保留模型计算关系，再将选定区域交给编译器；最终收益仍要检查生成内核与实际负载。</p>
+<h2 id="四、图的可见范围决定优化空间">四、图的可见范围决定优化空间</h2>
+<p>逐算子 Eager 执行时，框架按照 Python 调用顺序启动 Kernel。每个算子只完成自己的工作，中间结果通常要写回显存，再由下一个 Kernel 读取。模型计算图让编译器同时观察多个操作，从数据依赖中寻找可以消除或合并的步骤。</p>
+<p>以 Norm 后接量化为例。分开执行时，Norm Kernel 生成中间激活并写回显存，量化 Kernel 随后重新读取该激活。若后端识别出固定模式，可以在一个融合 Kernel 中完成两段计算，减少一次中间数据的写回与读取，也减少一次 Kernel Launch。SiLU 与逐元素乘法、Residual Add 与 RMSNorm 等组合具有相似的分析路径。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">独立执行：RMSNorm -&gt; 写回中间结果 -&gt; Quantize</span><br><span class="line">融合执行：RMSNorm 和 Quantize -&gt; 写回最终结果</span><br></pre></td></tr></table></figure>
+<p>融合是否成立，取决于图中同时出现哪些节点、数据依赖是否符合模式，以及目标硬件是否存在合适实现。部分融合只需观察相邻算子，在局部子图内就能完成；另一些优化需要更大的图可见范围。图切分位置因此会直接改变后端能够识别的模式。</p>
+<p>同一融合在小 token 批次中可能明显减少 Launch 开销，在大规模 Prefill 中则可能被矩阵计算时间掩盖。因此要结合执行规格看内核和 GPU 时间线。</p>
+<p>编译还会引入准备成本。模型首次启动时需要捕获图、执行优化并生成代码。若把这项工作推迟到业务请求到达之后，某个请求可能承担完整编译延迟，尾延迟会出现尖峰。因此，服务通常会在正式处理请求前准备所需编译产物，并用编译缓存减少重复启动工作。</p>
+<p>编译缓存减少重复准备，但不能说明某项融合已命中。服务启动后仍需检查实际执行的 Kernel。</p>
+<p>完成编译后，模型已经可以运行优化 Kernel。但一轮 Decode 往往由许多 Kernel 组成，CPU 仍要逐个向 GPU 提交工作。模型计算较短或 Batch 较小时，提交开销和 Kernel 之间的空隙更容易进入关键路径。CUDA Graph 处理的正是这一层问题。</p>
+<h2 id="五、CUDA-Graph-记录-GPU-执行">五、CUDA Graph 记录 GPU 执行</h2>
+<p>模型计算图与 CUDA Graph 共享“图”这个名字，描述对象却处于不同层级。模型计算图记录算子、Tensor 和数据依赖，供编译器分析和改写；CUDA Graph 记录已经确定的 GPU 工作及其依赖，供 CUDA Runtime 重放。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart TB
+    subgraph ModelGraph[模型计算图层]
+        A[&quot;算子与 Tensor 依赖&quot;] --&gt; B[&quot;图改写与算子融合&quot;]
+        B --&gt; C[&quot;生成优化 Kernel&quot;]
+    end
+    subgraph ExecutionGraph[GPU 执行层]
+        D[&quot;Kernel 提交序列&quot;] --&gt; E[&quot;CUDA Graph 捕获&quot;]
+        E --&gt; F[&quot;CUDA Graph 重放&quot;]
+    end
+    C --&gt; D
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef data fill:#f5f5f5,stroke:#9e9e9e,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class A,D input;
+    class B,E process;
+    class C data;
+    class F output;
+  </pre></div>
+<p><code>torch.compile</code> 主要改变计算如何组织：它捕获模型程序、应用图优化并生成 Kernel。CUDA Graph 主要改变 GPU 工作如何提交：首次运行时捕获一段操作序列，后续迭代直接重放，减少 CPU 反复发起 Kernel Launch 的成本。编译后的 Kernel 可以继续成为 CUDA Graph 中的执行节点，两项机制能够叠加。</p>
+<p>Decode 很适合利用重放。每轮只为活跃序列生成少量新 Token，模型层和主要算子顺序高度重复；当单轮 GPU 计算时间缩短后，CPU 提交开销占比会上升。捕获并重放稳定执行片段，可以减少重复提交产生的空隙。</p>
+<p>CUDA Graph 要求执行具有足够稳定性。捕获期间使用的 Tensor 地址需要在重放时保持有效，操作序列和资源使用不能任意变化。推理框架通常会准备地址稳定的输入缓冲区，每轮先把新的 Token、位置和元数据写入缓冲区，再重放已经捕获的图。业务请求持续变化，CUDA Graph 看到的内存入口仍然可以保持稳定。</p>
+<p>完整模型路径并不总能一次捕获。某个特殊操作可能依赖动态内存行为，或者当前 Backend 尚未满足捕获条件。Piecewise CUDA Graph 沿用前文的子图边界，只捕获适合稳定重放的编译片段，特殊操作继续通过普通路径执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">子图重放 -&gt; Attention 普通执行 -&gt; 子图重放 -&gt; Attention 普通执行</span><br></pre></td></tr></table></figure>
+<p>Piecewise 模式让可捕获片段获得重放收益，同时保留特殊操作的普通执行路径。扩大捕获范围可能减少提交开销，但也会提高后端与内存行为的要求。</p>
+<p>Full CUDA Graph 同时会收紧约束。完整路径中的每个操作都要适应捕获和重放，动态 Shape、临时内存以及 Backend 能力都可能限制覆盖范围。Piecewise 与 Full 反映的是兼容性与捕获范围之间的取舍。</p>
+<h2 id="六、动态负载映射到有限规格">六、动态负载映射到有限规格</h2>
+<p>LLM 在线服务中的变化维度很多。Prefill 长度由用户输入决定，Decode 批次中的活跃序列数会随请求完成而下降，新请求又可能在后续迭代加入。启用 Chunked Prefill 后，一段长 Prompt 还会被拆进多轮计算。若为每一种精确 Shape 都生成一份编译产物和 CUDA Graph，组合数量会迅速膨胀，准备时间与显存占用也随之增加。</p>
+<p>框架无需让图直接承载所有业务状态。请求 ID、逻辑序列和物理 KV Cache Block 之间的变化，可以压缩到固定格式的 Tensor 和元数据中。每轮只更新缓冲区内容，模型仍从相同入口读取数据。对于真正影响 Kernel 形状的 Token 数量，框架可以准备有限的捕获规格，再将运行时负载映射到合适规格。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" data-config="{}" hidden>
+    flowchart TD
+    A[&quot;本轮运行时输入&quot;] --&gt; B{&quot;命中已准备规格&quot;}
+    B --&gt;|命中| C[&quot;更新静态输入缓冲区&quot;]
+    C --&gt; D{&quot;选择捕获范围&quot;}
+    D --&gt;|完整路径| E[&quot;Full CUDA Graph 重放&quot;]
+    D --&gt;|稳定子图| F[&quot;Piecewise CUDA Graph 重放&quot;]
+    B --&gt;|未命中| G{&quot;允许 Padding&quot;}
+    G --&gt;|允许| H[&quot;映射到相邻规格&quot;]
+    H --&gt; C
+    G --&gt;|不允许| I[&quot;Eager 或其他执行路径&quot;]
+
+    classDef input fill:#fff8e1,stroke:#ff9800,color:#333;
+    classDef process fill:#f0f4ff,stroke:#5b8def,color:#333;
+    classDef decision fill:#fce4ec,stroke:#ef5350,color:#333;
+    classDef output fill:#e8f5e9,stroke:#4caf50,color:#333;
+    class A input;
+    class C,H process;
+    class B,D,G decision;
+    class E,F,I output;
+  </pre></div>
+<p>Padding 提供了一种直接映射方式。假设实际 Token 数小于某个已捕获规格，运行时可以补齐到该规格并复用对应 CUDA Graph。代价是 GPU 会处理一部分填充位置。规格越密集，额外计算通常越少，预捕获数量和资源成本则越高；规格越稀疏，复用管理更简单，Padding 浪费可能增加。</p>
+<p>编译阶段还要面对 Dynamic Shape Guard。编译器会记录某些输入条件，以保证生成代码只用于满足假设的 Shape。新输入突破已有约束时，普通 <code>torch.compile</code> 程序可能重新编译。在线推理需要避免把这种成本交给真实请求，因此框架会控制动态维度的表达、提前覆盖预期规格，并在开始服务前完成必要准备。</p>
+<p>预分配缓冲区保持地址稳定，元数据传递本轮状态，Bucket 或 Padding 将输入映射到有限规格。未覆盖的输入由回退路径处理，具体选择要检查实际运行模式。</p>
+<p>这套映射也解释了一些性能现象：相近的请求规模可能落入不同执行路径，延迟因此出现台阶；提高捕获覆盖范围可能减少 CPU Launch，却增加初始化时间和显存成本；为了减少 Padding 而增加规格数量，也可能让部署准备过程变重。图优化改变的是冷启动、稳态延迟、吞吐与资源占用之间的平衡。</p>
+<h2 id="七、沿执行层级定位性能问题">七、沿执行层级定位性能问题</h2>
+<p>当推理吞吐或延迟没有达到预期，只确认 <code>torch.compile</code> 已开启远远不够。整个链路至少存在四类相互独立的问题。</p>
+<p>第一类发生在模型捕获阶段。自定义模型出现意外 Graph Break，可能导致编译失败，或在允许分段的路径中生成较小子图。此时应检查触发位置、fullgraph 要求以及对应 Python 逻辑。</p>
+<p>第二类发生在图优化阶段。模型成功进入编译器，目标融合模式却没有匹配。原因可能是图切分隔开了相关算子，也可能是 Dtype、Shape、硬件或 Backend 不满足优化条件。此时应该查看生成图和编译产物，不能只看服务是否启动成功。</p>
+<p>第三类发生在 CUDA Graph 阶段。子图能够执行，但捕获范围有限，或者运行时输入没有命中已准备规格，最终回退到普通执行路径。此时要确认捕获发生在哪些规格、实际请求落入哪种模式，以及 Padding 和回退条件是否符合预期。</p>
+<p>第四类问题位于计算图之外。调度策略、KV Cache 容量、请求长度分布和内存带宽仍可能成为主导瓶颈。即使编译和 CUDA Graph 全部生效，过小的可用 Batch、频繁抢占或高度离散的输入也会限制吞吐。继续调节图优化参数无法修复图外瓶颈。</p>
+<p>排查时可以沿执行层级逐步收集证据：</p>
+<ol>
+<li>检查模型前向是否出现意外 Graph Break；</li>
+<li>检查目标算子是否进入同一编译区域，融合是否真正生成；</li>
+<li>检查 CUDA Graph 捕获范围和运行时命中情况；</li>
+<li>在 GPU 时间线中观察 Kernel 数量、Launch 间隙与显存活动；</li>
+<li>结合调度队列、Batch 规模和 KV Cache 使用情况判断图外限制。</li>
+</ol>
+<p>编译负责优化 Tensor 程序，CUDA Graph 减少 GPU 工作的重复提交，调度器决定本轮提交的负载。排查时分别确认这三层是否按预期工作，才能知道下一步应调图优化、执行规格还是组批策略。</p>
+<p>参考：<a target="_blank" rel="noopener" href="https://docs.vllm.ai/en/latest/design/torch_compile/">vLLM torch.compile 集成</a>、<a target="_blank" rel="noopener" href="https://docs.vllm.ai/en/latest/design/cuda_graphs/">CUDA Graph 设计</a>。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://wrygill.github.io">Aromatic</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wrygill.github.io/2026/07/20/vllm-inference-computation-graph/">https://wrygill.github.io/2026/07/20/vllm-inference-computation-graph/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wrygill.github.io" target="_blank">Aromatic</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86%E4%BC%98%E5%8C%96/">推理优化</a><a class="post-meta__tags" href="/tags/AI-Infra/">AI-Infra</a><a class="post-meta__tags" href="/tags/vLLM/">vLLM</a></div><div class="post-share"><div class="social-share" data-image="/img/miku_cover_1.jpg" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_3.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1">低并发自回归生成中，模型每次前向通常只为每条序列推进一个 token。权重需要反复读取，而计算量不足以充分利用 GPU，Decode 可能受显存带宽限制。 投机解码（Speculative Decoding，SD）用较便宜的草稿提出多个候选，再由目标模型并行验证。MTP（Multi-Token Prediction）可以为这个过程提供随模型训练的草稿模块。两者分别涉及解码流程和训练目标。 一、串行 Decode 这里先讨论低并发、权重访存占主要开销的 Decode。高并发、长上下文或 MoE 场景还可能受计算、KV 读取和通信限制。 对全部权重参与计算的 Dense 模型，batch=1、BF16 权重时，粗略估计每步约 2N2N2N FLOPs，对应 2N2N2N 字节权重读取，算术强度约为 1 FLOP/byte。只计权重读取的理想耗时下界为权重字节数除以 HBM 带宽。下面用假设的 70B、140 GB 权重说明量级：    硬件 HBM 带宽 70B FP16 单 token 下界     A100 40GB 1555 GB/s $\sim$90 ms   H100 SX...</div></div></div></a><a class="pagination-related" href="/2026/07/07/agent-harness-llm-complex-tasks/" title="Agent Harness 如何驱动 LLM 解决复杂任务"><img class="cover" src="/img/miku_cover_2.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Agent Harness 如何驱动 LLM 解决复杂任务</div></div><div class="info-2"><div class="info-item-1">让模型修复测试失败，需要的不只是一段修复建议。系统还要运行测试、读取堆栈、允许模型查看和修改文件，再把验证结果交回模型，供它决定下一步。 Agent Harness 负责组织这些执行与反馈，管理工具、上下文和权限。模型能力仍然重要，同一模型获得的环境信息和工具不同，任务表现也会改变。本文沿着执行回路、上下文管理、操作边界与分工展开。 一、执行回路 修复测试通常经历运行、定位、修改、再验证等步骤。可以先做计划，但具体操作需要根据执行结果调整，例如首次失败可能来自依赖配置，而非待修改的业务逻辑。 模型可以根据已有信息预测下一步，却无法提前知道命令在当前环境中的真实结果。工具反馈为后续判断提供证据：测试是否通过、文件是否存在、改动是否引入新错误。 Agent Harness 解决这个问题的办法是让 LLM 进入一个执行回路。 Claude Code 文档用收集上下文、执行动作、验证结果概括回路。这些活动会交错发生，一次工具调用可能只完成其中一部分。工作机制说明 一次修复中的工具调用可以是：  模型输出 run tests → Harness 执行并返回输出 模型根据输出决定 read_...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</div></div><div class="info-2"><div class="info-item-1">KV Cache 管理有两个相关的问题：请求不断增长时，怎样分配显存；不同请求出现相同前缀时，怎样找到可复用的状态。 PagedAttention 主要处理前一个问题，用块表访问非连续存放的 KV。vLLM 的 Automatic Prefix Caching（APC）在块管理之上增加哈希索引，SGLang 的 RadixAttention 则用基数树组织前缀。比较它们时，需要把物理存储、前缀匹配和淘汰策略分开。 一、连续预留的代价 如果一个实现按最大上下文长度为每条请求预留连续 KV 空间，那么短请求也会占住尚未使用的容量。以 Qwen3-8B 的 BF16 缓存为例，36 层、8 个 KV head、head dimension 128，单 token 的全部层缓存为： mKV=2×36×8×128×2=144 KiBm_{KV}=2\times36\times8\times128\times2=144\text{ KiB}mKV​=2×36×8×128×2=144 KiB按 32768 token 预留，一条请求需要 4.5 GiB；若当前输入与已生成内容合计只有 4096...</div></div></div></a><a class="pagination-related" href="/2026/06/27/llm-inference-memory/" title="LLM 推理显存估算"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">LLM 推理显存估算</div></div><div class="info-2"><div class="info-item-1">模型权重能装进显卡，并不意味着目标并发和上下文长度也能跑起来。推理还需要 KV Cache、激活、算子工作空间，以及 CUDA Graph 和通信缓冲区。容量规划需要把这些占用分开计算。 下面用 Qwen3-8B 作为 GQA 算例，配置取自官方 config.json：36 层、32 个 Q head、8 个 KV head、head dimension 128。这个固定算例用于解释计算方法；换模型时需要重新读取配置。全文使用 GiB（2302^{30}230 字节）和 KiB（2102^{10}210 字节），避免与十进制 GB 混用。 一、权重 未量化权重的存储量为： MW=N⋅bwM_W=N\cdot b_wMW​=N⋅bw​NNN 是实际参数量，bwb_wbw​ 是每个参数的字节数。Qwen3-8B 约有 8.2B 参数，用这个近似值计算：    权重格式 字节/参数 理论存储量     FP32 4 30.55 GiB   BF16 / FP16 2 15.27 GiB   FP8 / INT8 1 7.64 GiB   INT4 0.5 3.82 GiB    量化...</div></div></div></a><a class="pagination-related" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"><img class="cover" src="/img/miku_cover_2.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 PD 分离到 EPD 分离：多模态大模型推理架构的演进</div></div><div class="info-2"><div class="info-item-1">同样是一次问答，输入一段文字与输入多张高清图片，会给推理服务带来不同的负载。图片需要先完成解码、预处理和视觉编码，生成的视觉表示还会增加语言模型的输入长度。如果这些工作与文本生成共用资源，图片请求的到来就可能改变其他请求的排队时间和输出节奏。 PD 分离将 Prefill 与 Decode 放到不同实例上，分别处理输入与生成输出。多模态场景进一步引入了 Encode 阶段，形成 Encode–Prefill–Decode 三阶段链路。EPD 分离围绕这三个阶段划分调度和资源边界，让系统可以单独调整编码、输入处理和生成能力。 下面以视觉编码器连接自回归语言模型的图片理解架构为例，讨论执行流程、部署方式及其工程取舍。这里的 E 指多模态 Encode；纯文本请求的分词和词嵌入查表不单独构成本文的 E 阶段。 一、多模态推理链路 假设用户上传两张图片，并要求模型比较其中的差异。服务首先读取图片、解码并执行缩放、裁剪等预处理，再把结果交给视觉编码器。编码器输出经过必要的投影或合并后，形成语言模型可以消费的 embeddings。投影放在编码侧还是语言模型侧，取决于模型与服务实现。 这部分...</div></div></div></a><a class="pagination-related" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img class="cover" src="/img/miku_cover_3.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-25</div><div class="info-item-2">从 SD 到 MTP</div></div><div class="info-2"><div class="info-item-1">低并发自回归生成中，模型每次前向通常只为每条序列推进一个 token。权重需要反复读取，而计算量不足以充分利用 GPU，Decode 可能受显存带宽限制。 投机解码（Speculative Decoding，SD）用较便宜的草稿提出多个候选，再由目标模型并行验证。MTP（Multi-Token Prediction）可以为这个过程提供随模型训练的草稿模块。两者分别涉及解码流程和训练目标。 一、串行 Decode 这里先讨论低并发、权重访存占主要开销的 Decode。高并发、长上下文或 MoE 场景还可能受计算、KV 读取和通信限制。 对全部权重参与计算的 Dense 模型，batch=1、BF16 权重时，粗略估计每步约 2N2N2N FLOPs，对应 2N2N2N 字节权重读取，算术强度约为 1 FLOP/byte。只计权重读取的理想耗时下界为权重字节数除以 HBM 带宽。下面用假设的 70B、140 GB 权重说明量级：    硬件 HBM 带宽 70B FP16 单 token 下界     A100 40GB 1555 GB/s $\sim$90 ms   H100 SX...</div></div></div></a><a class="pagination-related" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">AI Infra 通信协议全景</div></div><div class="info-2"><div class="info-item-1">训练同步梯度、MoE 分发激活、推理服务搬运 KV，都需要把数据放到下一步计算所在的位置。它们对消息大小、带宽、延迟和同步方式的要求不同，但会共享 GPU 互联、网卡和传输库。 NCCL、RDMA、InfiniBand、NVLink、NIXL 与 gRPC 分属不同层次。下面从硬件通路到服务接口，说明它们各自处理什么，以及并行策略如何使用这些组件。图中箭头表示主要依赖关系，不穷举每种部署路径。      flowchart TB     A[&quot;服务接口&lt;br&#x2F;&gt;HTTP、SSE、gRPC&quot;]     B[&quot;推理引擎&lt;br&#x2F;&gt;ZMQ、共享内存、NIXL、Mooncake&quot;]     C[&quot;训练框架&lt;br&#x2F;&gt;Process Group、DDP、Megatron&quot;]     D[&quot;集合通信库&lt;br&#x2F;&gt;NCCL、Gloo、MPI&quot;]     E[&quot;跨机传输&lt;br&#x2F;&gt;TCP、RDMA（IB、R...</div></div></div></a><a class="pagination-related" href="/2026/06/01/llm-data-pipeline/" title="从文本到向量：LLM 的数据管道"><img class="cover" src="/img/miku_cover_1.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-02</div><div class="info-item-2">从文本到向量：LLM 的数据管道</div></div><div class="info-2"><div class="info-item-1">原始网页、代码和文档不能直接送入语言模型。训练前，需要提取正文、过滤与去重，再由 tokenizer 将文本编码成 token ID，最后通过 Embedding 查表得到向量。 这篇文章沿着这条数据管道，解释每一步如何改变模型看到的数据，以及它带来的存储和计算成本。  一、语料工程：从互联网到训练数据集 原始数据长什么样 网页语料常来自 Common Crawl 等来源。下面是一段示意 HTML，正文、广告和页脚混在一起： 1234567&lt;html&gt;&lt;head&gt;&lt;title&gt;Buy cheap shoes!!!&lt;/title&gt;&lt;/head&gt;&lt;body&gt;  &lt;div class=&quot;ad&quot;&gt;CLICK HERE FOR DEALS&lt;/div&gt;  &lt;p&gt;The mitochondria is the powerhouse of the cell.&lt;/p&gt;  &lt;p&gt;The mitochondria is the powerhouse o...</div></div></div></a></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/img/aromatic.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Aromatic</div><div class="author-info-description">后端开发、编程、生活、随笔</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">30</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">36</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">8</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/xxxxxx"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/WryGill" target="_blank" title="fab fa-github"><i class="GitHub"></i></a><a class="social-icon" href="mailto:constantblock37@gmail.com" target="_blank" title="fas fa-envelope"><i class="Email"></i></a><a class="social-icon" href="https://qm.qq.com/cgi-bin/qm/qr?k=2086931650" target="_blank" title="fab fa-qq"><i class="QQ"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%AE%A1%E7%AE%97%E5%9B%BE%E4%BB%8E%E8%B0%83%E5%BA%A6%E7%BB%93%E6%9E%9C%E5%BC%80%E5%A7%8B"><span class="toc-number">1.</span> <span class="toc-text">一、计算图从调度结果开始</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%A8%A1%E5%9E%8B%E5%89%8D%E5%90%91%E8%BF%9B%E5%85%A5%E7%BC%96%E8%AF%91%E5%99%A8"><span class="toc-number">2.</span> <span class="toc-text">二、模型前向进入编译器</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%AE%8C%E6%95%B4%E6%8D%95%E8%8E%B7%E5%90%8E%E7%9A%84%E4%B8%BB%E5%8A%A8%E5%88%87%E5%9B%BE"><span class="toc-number">3.</span> <span class="toc-text">三、完整捕获后的主动切图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%9B%BE%E7%9A%84%E5%8F%AF%E8%A7%81%E8%8C%83%E5%9B%B4%E5%86%B3%E5%AE%9A%E4%BC%98%E5%8C%96%E7%A9%BA%E9%97%B4"><span class="toc-number">4.</span> <span class="toc-text">四、图的可见范围决定优化空间</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81CUDA-Graph-%E8%AE%B0%E5%BD%95-GPU-%E6%89%A7%E8%A1%8C"><span class="toc-number">5.</span> <span class="toc-text">五、CUDA Graph 记录 GPU 执行</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%8A%A8%E6%80%81%E8%B4%9F%E8%BD%BD%E6%98%A0%E5%B0%84%E5%88%B0%E6%9C%89%E9%99%90%E8%A7%84%E6%A0%BC"><span class="toc-number">6.</span> <span class="toc-text">六、动态负载映射到有限规格</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E6%B2%BF%E6%89%A7%E8%A1%8C%E5%B1%82%E7%BA%A7%E5%AE%9A%E4%BD%8D%E6%80%A7%E8%83%BD%E9%97%AE%E9%A2%98"><span class="toc-number">7.</span> <span class="toc-text">七、沿执行层级定位性能问题</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进"/></a><div class="content"><a class="title" href="/2026/11/04/epd-disaggregation/" title="从 PD 分离到 EPD 分离：多模态大模型推理架构的演进">从 PD 分离到 EPD 分离：多模态大模型推理架构的演进</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention"/></a><div class="content"><a class="title" href="/2026/08/04/pagedattn-radixattn/" title="KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention">KV Cache 怎么存与怎么复用——PagedAttention 与 RadixAttention</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景"><img src="/img/miku_cover_1.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra 通信协议全景"/></a><div class="content"><a class="title" href="/2026/07/29/ai-infra-communication-protocols/" title="AI Infra 通信协议全景">AI Infra 通信协议全景</a><time datetime="2026-07-29T16:00:00.000Z" title="发表于 2026-07-30 00:00:00">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算"><img src="/img/miku_cover_2.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MoE 动态路由与稀疏计算"/></a><div class="content"><a class="title" href="/2026/07/26/moe-dynamic-routing/" title="MoE 动态路由与稀疏计算">MoE 动态路由与稀疏计算</a><time datetime="2026-07-26T16:00:00.000Z" title="发表于 2026-07-27 00:00:00">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP"><img src="/img/miku_cover_3.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="从 SD 到 MTP"/></a><div class="content"><a class="title" href="/2026/07/24/from-sd-to-mtp/" title="从 SD 到 MTP">从 SD 到 MTP</a><time datetime="2026-07-24T16:00:00.000Z" title="发表于 2026-07-25 00:00:00">2026-07-25</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Aromatic</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.5-b1"></script><script src="/js/main.js?v=5.5.5-b1"></script><div class="js-pjax"><script>(async () => {
+  const showKatex = () => {
+    document.querySelectorAll('#article-container .katex').forEach(el => el.classList.add('katex-show'))
+  }
+
+  if (!window.katex_js_css) {
+    window.katex_js_css = true
+    await btf.getCSS('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/katex.min.css')
+    if (false) {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/katex@0.16.28/dist/contrib/copy-tex.min.js')
+    }
+  }
+
+  showKatex()
+})()</script><script>(() => {
+  const parseViewBox = viewBox => {
+    if (!viewBox) return null
+    const parts = viewBox.trim().split(/[\s,]+/).map(n => Number(n))
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return null
+    return parts
+  }
+
+  const getSvgViewBox = svg => {
+    const attr = parseViewBox(svg.getAttribute('viewBox'))
+    if (attr) return attr
+
+    // Fallback: use bbox to build a viewBox
+    try {
+      const bbox = svg.getBBox()
+      if (bbox && bbox.width && bbox.height) return [bbox.x, bbox.y, bbox.width, bbox.height]
+    } catch (e) {
+      // getBBox may fail on some edge cases; ignore
+    }
+
+    const w = Number(svg.getAttribute('width')) || 0
+    const h = Number(svg.getAttribute('height')) || 0
+    if (w > 0 && h > 0) return [0, 0, w, h]
+    return [0, 0, 100, 100]
+  }
+
+  const setSvgViewBox = (svg, vb) => {
+    svg.setAttribute('viewBox', `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`)
+  }
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+  const openSvgInNewTab = ({ source, initViewBox }) => {
+    const getClonedSvg = () => {
+      if (typeof source === 'string') {
+        const template = document.createElement('template')
+        template.innerHTML = source.trim()
+        const svg = template.content.querySelector('svg')
+        return svg ? svg.cloneNode(true) : null
+      }
+      if (source && typeof source.cloneNode === 'function') {
+        return source.cloneNode(true)
+      }
+      return null
+    }
+
+    const clone = getClonedSvg()
+    if (!clone) return
+    if (initViewBox && initViewBox.length === 4) {
+      clone.setAttribute('viewBox', initViewBox.join(' '))
+    }
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    if (!clone.getAttribute('xmlns:xlink') && clone.outerHTML.includes('xlink:')) {
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    }
+    // inject background to match current theme
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+    const bg = getComputedStyle(document.body).backgroundColor || (isDark ? '#1e1e1e' : '#ffffff')
+    if (!clone.style.background) clone.style.background = bg
+
+    const serializer = new XMLSerializer()
+    const svgSource = serializer.serializeToString(clone)
+    const htmlSource = `<!doctype html><html><head><meta charset="utf-8" />
+      <style>
+        html, body { width: 100%; height: 100%; margin: 0; display: flex; align-items: center; justify-content: center; background: ${bg}; }
+        svg { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+      </style>
+      </head><body>${svgSource}</body></html>`
+    const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+
+  const attachMermaidViewerButton = wrap => {
+    let btn = wrap.querySelector('.mermaid-open-btn')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'mermaid-open-btn'
+      wrap.appendChild(btn)
+    }
+
+    btn.innerHTML = '<i class="fa fa-search fa-fw" aria-hidden="true"></i>'
+
+    if (!btn.__mermaidViewerBound) {
+      btn.addEventListener('click', e => {
+        e.preventDefault()
+        e.stopPropagation()
+        const svg = wrap.__mermaidOriginalSvg || wrap.querySelector('svg')
+        if (!svg) return
+        const initViewBox = wrap.__mermaidInitViewBox
+        if (typeof svg === 'string') {
+          openSvgInNewTab({ source: svg, initViewBox })
+          return
+        }
+        openSvgInNewTab({ source: svg, initViewBox })
+      })
+      btn.__mermaidViewerBound = true
+    }
+  }
+
+  // Zoom around a point (px, py) in the SVG viewport (in viewBox coordinates)
+  const zoomAtPoint = (vb, factor, px, py) => {
+    const w = vb[2] * factor
+    const h = vb[3] * factor
+    const nx = px - (px - vb[0]) * factor
+    const ny = py - (py - vb[1]) * factor
+    return [nx, ny, w, h]
+  }
+
+  const initMermaidGestures = wrap => {
+    const svg = wrap.querySelector('svg')
+    if (!svg) return
+
+    // Ensure viewBox exists so gestures always work
+    const initVb = getSvgViewBox(svg)
+    wrap.__mermaidInitViewBox = initVb
+    wrap.__mermaidCurViewBox = initVb.slice()
+    setSvgViewBox(svg, initVb)
+
+    // Avoid binding multiple times on themeChange/pjax
+    if (wrap.__mermaidGestureBound) return
+    wrap.__mermaidGestureBound = true
+
+    // Helper: map client (viewport) coordinate -> viewBox coordinate
+    const clientToViewBox = (clientX, clientY) => {
+      const rect = svg.getBoundingClientRect()
+      const vb = wrap.__mermaidCurViewBox || getSvgViewBox(svg)
+      const x = vb[0] + (clientX - rect.left) * (vb[2] / rect.width)
+      const y = vb[1] + (clientY - rect.top) * (vb[3] / rect.height)
+      return { x, y, rect, vb }
+    }
+
+    const state = {
+      pointers: new Map(),
+      startVb: null,
+      startDist: 0,
+      startCenter: null
+    }
+
+    const clampVb = vb => {
+      const init = wrap.__mermaidInitViewBox || vb
+      const minW = init[2] * 0.1
+      const maxW = init[2] * 10
+      const minH = init[3] * 0.1
+      const maxH = init[3] * 10
+      vb[2] = clamp(vb[2], minW, maxW)
+      vb[3] = clamp(vb[3], minH, maxH)
+      return vb
+    }
+
+    const setCurVb = vb => {
+      vb = clampVb(vb)
+      wrap.__mermaidCurViewBox = vb
+      setSvgViewBox(svg, vb)
+    }
+
+    const onPointerDown = e => {
+      // Allow only primary button for mouse
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      svg.setPointerCapture(e.pointerId)
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (state.pointers.size === 1) {
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      } else if (state.pointers.size === 2) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        state.startDist = Math.hypot(dx, dy)
+        state.startVb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        state.startCenter = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      }
+    }
+
+    const onPointerMove = e => {
+      if (!state.pointers.has(e.pointerId)) return
+      state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      // Pan with 1 pointer
+      if (state.pointers.size === 1 && state.startVb) {
+        const p = [...state.pointers.values()][0]
+        const prev = { x: e.clientX - e.movementX, y: e.clientY - e.movementY }
+        // movementX/Y unreliable on touch, compute from stored last position
+        const last = wrap.__mermaidLastSinglePointer || p
+        const dxClient = p.x - last.x
+        const dyClient = p.y - last.y
+        wrap.__mermaidLastSinglePointer = p
+
+        const { rect } = clientToViewBox(p.x, p.y)
+        const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+        const dx = dxClient * (vb[2] / rect.width)
+        const dy = dyClient * (vb[3] / rect.height)
+        setCurVb([vb[0] - dx, vb[1] - dy, vb[2], vb[3]])
+        return
+      }
+
+      // Pinch zoom with 2 pointers
+      if (state.pointers.size === 2 && state.startVb && state.startDist > 0) {
+        const pts = [...state.pointers.values()]
+        const dx = pts[0].x - pts[1].x
+        const dy = pts[0].y - pts[1].y
+        const dist = Math.hypot(dx, dy)
+        if (!dist) return
+        const factor = state.startDist / dist // dist bigger => zoom in (viewBox smaller)
+
+        const cx = (pts[0].x + pts[1].x) / 2
+        const cy = (pts[0].y + pts[1].y) / 2
+        const centerClient = { x: cx, y: cy }
+
+        const pxy = clientToViewBox(centerClient.x, centerClient.y)
+        const cpx = pxy.x
+        const cpy = pxy.y
+
+        const vb = zoomAtPoint(state.startVb, factor, cpx, cpy)
+        setCurVb(vb)
+      }
+    }
+
+    const onPointerUpOrCancel = e => {
+      state.pointers.delete(e.pointerId)
+      if (state.pointers.size === 0) {
+        state.startVb = null
+        state.startDist = 0
+        state.startCenter = null
+        wrap.__mermaidLastSinglePointer = null
+      } else if (state.pointers.size === 1) {
+        // reset single pointer baseline to avoid jump
+        wrap.__mermaidLastSinglePointer = [...state.pointers.values()][0]
+      }
+    }
+
+    // Wheel zoom (mouse/trackpad)
+    const onWheel = e => {
+      // ctrlKey on mac trackpad pinch; we treat both as zoom
+      e.preventDefault()
+      const delta = e.deltaY
+      const zoomFactor = delta > 0 ? 1.1 : 0.9
+      const { x, y } = clientToViewBox(e.clientX, e.clientY)
+      const vb = (wrap.__mermaidCurViewBox || getSvgViewBox(svg)).slice()
+      setCurVb(zoomAtPoint(vb, zoomFactor, x, y))
+    }
+
+    const onDblClick = () => {
+      const init = wrap.__mermaidInitViewBox
+      if (!init) return
+      wrap.__mermaidCurViewBox = init.slice()
+      setSvgViewBox(svg, init)
+    }
+
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUpOrCancel)
+    svg.addEventListener('pointercancel', onPointerUpOrCancel)
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('dblclick', onDblClick)
+  }
+
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+
+      // Clear old render (themeChange/pjax will rerun)
+      const oldSvg = item.querySelector('svg')
+      if (oldSvg) oldSvg.remove()
+      item.__mermaidGestureBound = false
+
+      const config = mermaidSrc.dataset.config ? JSON.parse(mermaidSrc.dataset.config) : {}
+      if (!config.theme) {
+        config.theme = theme
+      }
+      const mermaidThemeConfig = `%%{init: ${JSON.stringify(config)}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+        if (true) initMermaidGestures(item)
+        item.__mermaidOriginalSvg = svg
+        if (true) attachMermaidViewerButton(item)
+      }
+
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>
