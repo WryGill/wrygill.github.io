@@ -13,6 +13,7 @@ menu:
   归档: /archives/ || fas fa-archive
   标签: /tags/ || fas fa-tags
   分类: /categories/ || fas fa-folder-open
+  友链: /links/ || fas fa-link
 
 # 首页
 index:
