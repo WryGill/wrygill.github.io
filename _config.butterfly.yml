@@ -112,5 +112,6 @@ inject:
     - '<script defer src="/js/busuanzi-fallback.js"></script>'
 
 # 兼容 Butterfly 统计标签的访客计数服务
-asset:
-  busuanzi: /js/busuanzi-client.js
+CDN:
+  option:
+    busuanzi: /js/busuanzi-client.js
