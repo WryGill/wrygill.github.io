@@ -2,10 +2,17 @@
 
 # 导航栏
 nav:
-  logo:
-    display_title: true
+  logo: /img/aromatic.jpg
+  display_title: true
   fixed: true
   animations: true
+
+# 导航菜单
+menu:
+  首页: / || fas fa-home
+  归档: /archives/ || fas fa-archive
+  标签: /tags/ || fas fa-tags
+  分类: /categories/ || fas fa-folder-open
 
 # 首页
 index:
@@ -17,16 +24,18 @@ index:
 # 首页 banner 背景图
 index_img: /img/miku.jpg
 
-# 头像
+# 浏览器标签页图标与头像
+favicon: /img/aromatic.jpg
+
 avatar:
   img: /img/aromatic.jpg
   effect: true
 
 # 社交
 social:
-  GitHub: https://github.com/WryGill || fab fa-github
-  Email: mailto:constantblock37@gmail.com || fas fa-envelope
-  QQ: https://qm.qq.com/cgi-bin/qm/qr?k=2086931650 || fab fa-qq
+  fab fa-github: "https://github.com/WryGill || GitHub || #24292e"
+  fas fa-envelope: "mailto:constantblock37@gmail.com || Email || #4a7dbe"
+  fab fa-qq: "https://qm.qq.com/cgi-bin/qm/qr?k=2086931650 || QQ || #12B7F5"
 
 # 文章
 post:
@@ -96,3 +105,8 @@ mermaid:
   theme:
     light: default
     dark: dark
+
+# 不蒜子接口超时时显示占位符，返回数字后仍由主题刷新
+inject:
+  bottom:
+    - '<script defer src="/js/busuanzi-fallback.js"></script>'

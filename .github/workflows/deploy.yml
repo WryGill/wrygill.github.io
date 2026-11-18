@@ -36,19 +36,27 @@ jobs:
             posts
             assets
 
-      - name: Copy posts and assets to source
+      - name: Copy posts to source
         run: |
           mkdir -p source/source/_posts
           rm -rf source/source/_posts/*
           cp -r content/posts/*.md source/source/_posts/
-          if [ -d content/assets ]; then
-            rm -rf source/source/assets
-            cp -r content/assets source/source/assets
-          fi
           echo "=== Copied posts ==="
           ls -la source/source/_posts/
-          echo "=== Copied assets ==="
-          ls -la source/source/assets/ 2>/dev/null || echo "(none)"
+
+      - name: Copy assets to source
+        run: |
+          if [ -d content/assets ]; then
+            mkdir -p source/source/assets
+            # 只覆盖 content/assets 中存在的文章插图目录，保留 source branch 中其他自定义资产（如主题图片）
+            for dir in content/assets/*/; do
+              slug=$(basename "$dir")
+              rm -rf "source/source/assets/$slug"
+              cp -r "$dir" "source/source/assets/$slug"
+            done
+            echo "=== Copied assets ==="
+            find source/source/assets -type f
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -59,34 +67,39 @@ jobs:
         run: npm install
         working-directory: source
 
-      - name: Build & Deploy
+      - name: Build
         working-directory: source
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node -e "
-          const Hexo = require('hexo');
-          const hexo = new Hexo(process.cwd(), { silent: false });
-          hexo.env.init = true;
-          hexo.init()
-            .then(() => hexo.load())
-            .then(() => hexo.call('clean'))
-            .then(() => hexo.call('generate'))
-            .then(() => {
-              console.log('Generate done, public/ files:');
-              const fs = require('fs');
-              const files = fs.readdirSync('public').filter(f => f.endsWith('.html'));
-              files.slice(0,3).forEach(f => {
-                const size = fs.statSync('public/' + f).size;
-                console.log('  ' + f + ': ' + size + ' bytes');
-              });
-              return hexo.exit();
-            })
-            .catch(e => { console.error('Error:', e.message); process.exit(1); });
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            // 关键修复：env.init 必须设为 true，否则外部插件（含 markdown 渲染器）不会被加载
+            hexo.env.init = true;
+            hexo.init()
+              .then(() => hexo.load())
+              .then(() => hexo.call('generate'))
+              .then(() => { console.log('Generate done'); return hexo.exit(); })
+              .catch(e => { console.error(e); process.exit(1); });
           "
+
+      - name: Deploy
+        working-directory: source
+        env:
+          HEXO_DEPLOYER_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          cd public && git init && git add -A
-          git commit -m "Site updated: $(date -u '+%Y-%m-%d %H:%M:%S')"
-          git remote add origin "https://oauth2:${TOKEN}@github.com/WryGill/wrygill.github.io.git"
-          git push --force origin master
+          # 使用 extraheader 让 git push 自动带上 token 认证，避免交互式输入密码
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf '%s' "x-access-token:$HEXO_DEPLOYER_GIT_TOKEN" | base64 -w0)"
+          # trigger rebuild: source branch images fixed + index_img added
+          node -e "
+            const Hexo = require('hexo');
+            const hexo = new Hexo(process.cwd(), { silent: false });
+            hexo.env.init = true;
+            hexo.init()
+              .then(() => hexo.load())
+              .then(() => hexo.call('deploy', { force: true }))
+              .then(() => { console.log('Deploy done'); return hexo.exit(); })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
+# trigger rebuild: cover config added
